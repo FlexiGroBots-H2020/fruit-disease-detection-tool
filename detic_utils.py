@@ -245,21 +245,25 @@ def detic2img(img, predictions_nms, classes_names):
     return out_img, out_img_masked, total_mask
 
 
-def lists2img(img, predictions_nms, classes_names):
+def lists2img(img, predictions_nms, classes_names, fruit_zone):
     bboxes, confs, clss, masks = predictions_nms
     # Draw detections over image and save it 
     out_img = draw_detections(img, predictions_nms, classes_names)
     
     # Generate masks
-    out_img_masked, total_mask = generate_final_mask(masks, img)
+    out_img_masked, total_mask = generate_final_mask(masks, img, fruit_zone)
     
     return out_img, out_img_masked, total_mask
 
 
-def generate_final_mask(masks, img):
+def generate_final_mask(masks, img, fruit_zone=(0,0,0,0)):
     total_mask = np.zeros((img.shape[0], img.shape[1]))
+    if fruit_zone == (0,0,0,0):
+        fruit_zone = (0, 0, img.shape[0], img.shape[1])
+
     for jj in range(len(masks)):
-        total_mask = total_mask + masks[jj].cpu().numpy().astype(int)[0:total_mask.shape[0], 0:total_mask.shape[1]]
+        total_mask[fruit_zone[0]:fruit_zone[2], fruit_zone[1]:fruit_zone[3]] = total_mask[fruit_zone[0]:fruit_zone[2], fruit_zone[1]:fruit_zone[3]] + masks[jj].cpu().numpy().astype(int)[0:(fruit_zone[2]-fruit_zone[0]), 0:(fruit_zone[3]-fruit_zone[1])]
+        #total_mask = total_mask + masks[jj].cpu().numpy().astype(int)[0:total_mask.shape[0], 0:total_mask.shape[1]]
     if np.max(total_mask)>1:
         total_mask[total_mask > 1] = 1
         
@@ -270,9 +274,21 @@ def generate_final_mask(masks, img):
 def patch_image(image, patch_size, overlap):
     image_tiles = []
     step = round(patch_size*(1-overlap))
-    for y in range(0, image.shape[0], step):
-        for x in range(0, image.shape[1], step):
+    h, w, n_channels = image.shape
+    if h == patch_size:
+        step_h = patch_size
+    else:
+        step_h = step
+    if w == patch_size:
+        step_w = patch_size
+    else:
+        step_w = step
+    
+    for y in range(0, image.shape[0], step_h):
+        for x in range(0, image.shape[1], step_w):
             image_tile = image[y:y + patch_size, x:x + patch_size]
+            if image_tile.shape != (patch_size,patch_size, n_channels):
+                image_tile= cv2.copyMakeBorder(image_tile,0,int(patch_size-image_tile.shape[0]), 0, int(patch_size-image_tile.shape[1]),cv2.BORDER_CONSTANT, value=[0, 0, 0])
             image_tiles.append(image_tile)
     return image_tiles
             
@@ -282,41 +298,50 @@ def im2patches(img, patch_size=640, overlap=0.2):
     step = round(patch_size*(1-overlap))
     n_h, n_w, _ = np.ceil(np.array(img.shape) / step).astype(int) * step
     
-    img_border= cv2.copyMakeBorder(img,0,int(n_h-h), 0, int(n_w-w),cv2.BORDER_CONSTANT, value=[0, 0, 0])
-        
+    if h < patch_size:
+        n_h = patch_size
+    if w < patch_size:
+        n_w = patch_size
+    
+    img_border= cv2.copyMakeBorder(img,0,int(n_h-h), 0, int(n_w-w),cv2.BORDER_CONSTANT, value=[0, 0, 0]) 
     patches = patch_image(img_border, patch_size, overlap)
-    
     empty_mask = np.zeros((img_border.shape[0], img_border.shape[1]))
-    
-    patches_np = np.reshape(patches, (int(n_h/step), int(n_w/step)))
+    patches_np = np.reshape(patches, (int(n_h/step), int(n_w/step), patch_size, patch_size, channels))
     return patches_np, empty_mask
 
-def patch_detic2list(empty_mask, detic_pred, patch_size, row, column, overlap):
+def patch_detic2list(empty_mask, detic_pred, patch_size, row, column, overlap, fruit_zone):
     bboxes, confs, clss, masks= detic2flat(detic_pred)
     # bboxes to img coordinates
     for ii in range(len(bboxes)):
-        bboxes[ii][0] = bboxes[ii][0] + column*patch_size*(1 - overlap)
-        bboxes[ii][1] = bboxes[ii][1] + row*patch_size*(1 - overlap)
-        bboxes[ii][2] = bboxes[ii][2] + column*patch_size*(1 - overlap)
-        bboxes[ii][3] = bboxes[ii][3] + row*patch_size*(1 - overlap)
+        bboxes[ii][0] = bboxes[ii][0] + column*patch_size*(1 - overlap) + fruit_zone[1]
+        bboxes[ii][1] = bboxes[ii][1] + row*patch_size*(1 - overlap) + fruit_zone[0]
+        bboxes[ii][2] = bboxes[ii][2] + column*patch_size*(1 - overlap) + fruit_zone[1]
+        bboxes[ii][3] = bboxes[ii][3] + row*patch_size*(1 - overlap) + fruit_zone[0]
     # masks to img coordinates
     total_mask = np.zeros((empty_mask.shape[0], empty_mask.shape[1]))
     for jj in range(len(masks)):
         total_mask_patch = total_mask[round(row*patch_size*(1 - overlap)): round(row*patch_size*(1 - overlap) + patch_size), round(column*patch_size*(1 - overlap)):round(column*patch_size*(1 - overlap) + patch_size)]
+        window_shape = total_mask_patch.shape
+        if total_mask_patch.shape != (patch_size,patch_size):
+                total_mask_patch = cv2.copyMakeBorder(total_mask_patch,0,int(patch_size-total_mask_patch.shape[0]), 0, int(patch_size-total_mask_patch.shape[1]),cv2.BORDER_CONSTANT, value=[0, 0, 0])
         total_mask_patch = total_mask_patch + masks[jj].cpu().numpy().astype(int)
+        if total_mask_patch.shape != window_shape:
+                total_mask_patch = total_mask_patch[0:window_shape[0], 0:window_shape[1]]
         total_mask[round(row*patch_size*(1 - overlap)):round(row*patch_size*(1 - overlap) + patch_size), round(column*patch_size*(1 - overlap)):round(column*patch_size*(1 - overlap) + patch_size)] = total_mask_patch
     if np.max(total_mask)>1:
         total_mask[total_mask > 1] = 1
 
     return bboxes, confs, clss, total_mask
 
-def detic_proccess_img(img, args, detic_predictor, logger, save=True, path=""):
+def detic_proccess_img(img_p, args, detic_predictor, logger, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None):
+    if img_o is None:
+        img_o=img_p
     
     if args.patching:
         patch_size = args.patch_size
         overlap = args.overlap
-        patches, empty_mask = im2patches(img, patch_size, overlap)
-        n_row, n_col = patches.shape
+        patches, empty_mask = im2patches(img_p, patch_size, overlap)
+        n_row, n_col, _, _, _ = patches.shape
         logger.info("{} patches: {} rows and {} columns".format(str(n_row*n_col), str(n_row), str(n_col)))
         bboxs_t, confs_t, clss_t, masks_t = ([] for i in range(4))
         for ii in range(n_row):
@@ -327,7 +352,7 @@ def detic_proccess_img(img, args, detic_predictor, logger, save=True, path=""):
                 img_out_bbox, img_out_mask, mask_tot, pred_str, p_patch_nms= detic_post_proccess(img_patch, detic_predictor, pred_patch, args)
                 
                 # save detections in full img coordinates
-                bboxs_p, confs_p, clss_p, masks_p = patch_detic2list(empty_mask, p_patch_nms, patch_size, ii, jj, overlap)
+                bboxs_p, confs_p, clss_p, masks_p = patch_detic2list(empty_mask, p_patch_nms, patch_size, ii, jj, overlap, fruit_zone)
                 bboxs_t = bboxs_t + bboxs_p.tolist()
                 confs_t = confs_t + confs_p.tolist()
                 clss_t = clss_t + clss_p.tolist()
@@ -335,14 +360,14 @@ def detic_proccess_img(img, args, detic_predictor, logger, save=True, path=""):
                 
                 logger.info("{} {}: {} in {:.2f}s".format(path, "patch " + str(ii) + " " + str(jj) ,pred_str, time.time() - start_time)) 
                     
-                if args.debug:
-                    if args.output:
-                        if os.path.isdir(args.output):
-                            assert os.path.isdir(args.output), args.output
-                            out_filename = os.path.join(args.output, os.path.basename(path))
+                if save:
+                    if save_path != "":
+                        if os.path.isdir(save_path):
+                            assert os.path.isdir(save_path), save_path
+                            out_filename = os.path.join(save_path, os.path.basename(path))
                         else:
-                            assert len(args.input) == 1, "Please specify a directory with args.output"
-                            out_filename = args.output
+                            assert len(args.input) == 1, "Please specify a directory with save_path"
+                            out_filename = save_path
                     else:
                         out_filename=""
                     
@@ -356,16 +381,16 @@ def detic_proccess_img(img, args, detic_predictor, logger, save=True, path=""):
         else:
             pred_compose_nms = pred_compose
         classes_names = detic_predictor.metadata.thing_classes
-        img_out_bbox, img_out_mask, mask_tot = lists2img(img, pred_compose_nms, classes_names)
+        img_out_bbox, img_out_mask, mask_tot = lists2img(np.asarray(img_o), pred_compose_nms, classes_names, fruit_zone)
         
         if save:
-            if args.output:
-                if os.path.isdir(args.output):
-                    assert os.path.isdir(args.output), args.output
-                    out_filename = os.path.join(args.output, os.path.basename(path))
+            if save_path:
+                if os.path.isdir(save_path):
+                    assert os.path.isdir(save_path), save_path
+                    out_filename = os.path.join(save_path, os.path.basename(path))
                 else:
-                    assert len(args.input) == 1, "Please specify a directory with args.output"
-                    out_filename = args.output
+                    assert len(save_path) == 1, "Please specify a directory with args.output"
+                    out_filename = save_path
             else:
                 out_filename=""
             
@@ -374,18 +399,18 @@ def detic_proccess_img(img, args, detic_predictor, logger, save=True, path=""):
             
     else:
         start_time = time.time()
-        predictions, visualized_output = detic_predictor.run_on_image(img)
-        img_out_bbox, img_out_mask, mask_tot, pred_str, _= detic_post_proccess(img, detic_predictor, predictions, args)
+        predictions, visualized_output = detic_predictor.run_on_image(img_p)
+        img_out_bbox, img_out_mask, mask_tot, pred_str, _= detic_post_proccess(img_p, detic_predictor, predictions, args)
         logger.info("{}: {} in {:.2f}s".format(path, pred_str, time.time() - start_time)) 
         
         if save:
-            if args.output:
-                if os.path.isdir(args.output):
-                    assert os.path.isdir(args.output), args.output
-                    out_filename = os.path.join(args.output, os.path.basename(path))
+            if save_path:
+                if os.path.isdir(save_path):
+                    assert os.path.isdir(save_path),save_path
+                    out_filename = os.path.join(save_path, os.path.basename(path))
                 else:
-                    assert len(args.input) == 1, "Please specify a directory with args.output"
-                    out_filename = args.output
+                    assert len(args.input) == 1, "Please specify a directory with save_path"
+                    out_filename = save_path
             else:
                 out_filename=""
             
@@ -394,57 +419,9 @@ def detic_proccess_img(img, args, detic_predictor, logger, save=True, path=""):
             
     return img_out_bbox, img_out_mask
 
-def detic_single_im(args, detic_predictor, logger, save=True, img=None):
-    if img is not None:
-        img_out_bbox, img_out_mask = detic_proccess_img(img , args, detic_predictor, logger, save=False)
-    else:
-        if len(args.input) == 1:
-            args.input = glob.glob(os.path.expanduser(args.input[0]))
-            assert args.input, "The input path(s) was not found"
-        for path in tqdm.tqdm(args.input, disable=not args.output):
-            img = read_image(path, format="BGR")
-            img_out_bbox, img_out_mask = detic_proccess_img(img , args, detic_predictor, logger, save=True, path=path)       
+def detic_single_im(args, detic_predictor, logger, save=True, save_path="",img_processed=None, fruit_zone=(0,0,0,0), img_original=None):
+    if img_processed is not None:
+        img_out_bbox, img_out_mask = detic_proccess_img(img_processed, args, detic_predictor, logger, save=save, save_path=save_path, fruit_zone=fruit_zone, img_o=img_original)
     return img_out_bbox, img_out_mask  
         
             
-def detic_video(args, detic_predictor, logger):
-    # set video input parameters
-    video = cv2.VideoCapture(args.input[0])
-    width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = video.get(cv2.CAP_PROP_FPS)
-    num_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    basename = os.path.basename(args.input[0])
-
-    # Create Videowriters to generate video output
-    file_ext = ".avi"
-    path_out_vis = os.path.join(args.output, basename.split(".")[0] + file_ext)
-    path_out_mask = os.path.join(args.output, basename.split(".")[0] + "_mask" + file_ext)
-    output_file_vis = cv2.VideoWriter(path_out_vis, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), fps,
-                                        (width, height))
-    output_file_mask = cv2.VideoWriter(path_out_mask, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'), fps,
-                                        (width, height))
-
-    frame_count = 0
-    # Processing loop
-    while (video.isOpened()):
-        # read frame
-        ret, frame = video.read()
-        if frame is None:
-            break
-        # predict detections DETIC
-        start_time = time.time()
-        img_out_bbox, img_out_mask = detic_single_im(args, detic_predictor, logger, save=False, img=frame)
-            
-        # write results to video output
-        output_file_vis.write(np.uint8(img_out_bbox))
-        output_file_mask.write(np.uint8(img_out_mask))
-        frame_count = frame_count + 1
-        end_time = time.time() - start_time
-        print("Detection finished in " + str(round(end_time, 2)) + "s")
-
-        
-    # Release VideoCapture and VideoWriters
-    video.release()
-    output_file_vis.release() 
-    output_file_mask.release()       

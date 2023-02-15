@@ -18,3 +18,4 @@ fiftyone
 filterpy
 kserve==0.7.0
 patchify
+mpi4py
