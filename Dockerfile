@@ -12,6 +12,7 @@ RUN pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0
 COPY requirements.txt /wd
 RUN pip install -r requirements.txt
 
+COPY fruit_pipeline.py /wd
 COPY fruit_detection.py /wd
 COPY fruit_detection_utils.py /wd
 COPY fruit_detection_kserve.py /wd
@@ -30,6 +31,7 @@ WORKDIR /wd
 COPY models_clip/ /wd/models_clip/
 COPY models/ /wd/models/
 COPY datasets /wd/datasets/
+COPY X_Decoder /wd/X_Decoder/
 
 RUN chmod -R 777 /wd
 

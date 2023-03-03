@@ -9,9 +9,6 @@ from Detic.detic.config import add_detic_config
 import torchvision
 import os
 import time
-import tqdm
-import glob
-from detectron2.data.detection_utils import read_image
 
 
 def setup_cfg(args):
@@ -77,7 +74,7 @@ def get_parser():
         "--opts",
         help="Modify config options using the command-line 'KEY VALUE' pairs",
         default=["MODEL.WEIGHTS",
-                "models/Detic_LCOCOI21k_CLIP_SwinB_896b32_4x_ft4x_max-size.pth"],
+                "models/Detic_LI_CLIP_SwinB_896b32_4x_ft4x_max-size.pth"],
         nargs=argparse.REMAINDER,
     )
     
@@ -101,24 +98,6 @@ def non_max_suppression(prediction, iou_thres=0.45):
     idx_np=idx.cpu().numpy()
     keep_predictions = {}
     keep_predictions['instances'] = prediction['instances'][idx_np]
-    return keep_predictions
-
-def non_max_suppression_compose(prediction, iou_thres=0.45):
-    """Non-Maximum Suppression (NMS) on inference results to reject overlapping bounding boxes
-    Returns:
-         Dict of predictions with the not overlapped instances 
-    """
-    bbxs_out, confs_out, clss_out, masks_out = [], [], [], []
-    bboxes, confs, clss, masks = prediction #bboxes in xyxy
-    masks_out = masks
-    
-    idx = torchvision.ops.nms(bboxes, confs, iou_thres)  # NMS
-    idx_np=idx.cpu().numpy()
-    for idx in idx_np:
-        bbxs_out.append(bboxes[idx]) 
-        confs_out.append(confs[idx])
-        clss_out.append(clss[idx]) 
-    keep_predictions = bbxs_out, confs_out, clss_out, masks_out
     return keep_predictions
 
 
@@ -222,39 +201,6 @@ def plot_one_box(x, img, color=None, label=None, line_thickness=None):
         cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
     return img
 
-        
-def draw_detections(img, prediction, clss_name):
-    img_draw = np.copy(img).astype("float")
-    bboxes, confs, clss, masks = prediction #bboxes in xyxy
-    for ii, bbox in enumerate(bboxes):
-        box = bbox.cpu().numpy().astype('int')
-        label_box =  str(clss_name[int(clss[ii].cpu().numpy())]) + " " + str(np.round(confs[ii].cpu().numpy(),2))
-        img_draw = plot_one_box(box,img_draw,label=label_box)
-    return img_draw
-
-
-def detic2img(img, predictions_nms, classes_names):
-    predictions_nms  = detic2flat(predictions_nms) #bboxes in xyxy
-    bboxes, confs, clss, masks = predictions_nms 
-    # Draw detections over image and save it 
-    out_img = draw_detections(img, predictions_nms, classes_names)
-    
-    # Generate masks
-    out_img_masked, total_mask = generate_final_mask(masks, img)
-    
-    return out_img, out_img_masked, total_mask
-
-
-def lists2img(img, predictions_nms, classes_names, fruit_zone):
-    bboxes, confs, clss, masks = predictions_nms
-    # Draw detections over image and save it 
-    out_img = draw_detections(img, predictions_nms, classes_names)
-    
-    # Generate masks
-    out_img_masked, total_mask = generate_final_mask(masks, img, fruit_zone)
-    
-    return out_img, out_img_masked, total_mask
-
 
 def generate_final_mask(masks, img, fruit_zone=(0,0,0,0)):
     total_mask = np.zeros((img.shape[0], img.shape[1]))
@@ -271,43 +217,38 @@ def generate_final_mask(masks, img, fruit_zone=(0,0,0,0)):
     return out_img_masked, total_mask
 
 
-def patch_image(image, patch_size, overlap):
-    image_tiles = []
-    step = round(patch_size*(1-overlap))
-    h, w, n_channels = image.shape
-    if h == patch_size:
-        step_h = patch_size
-    else:
-        step_h = step
-    if w == patch_size:
-        step_w = patch_size
-    else:
-        step_w = step
-    
-    for y in range(0, image.shape[0], step_h):
-        for x in range(0, image.shape[1], step_w):
-            image_tile = image[y:y + patch_size, x:x + patch_size]
-            if image_tile.shape != (patch_size,patch_size, n_channels):
-                image_tile= cv2.copyMakeBorder(image_tile,0,int(patch_size-image_tile.shape[0]), 0, int(patch_size-image_tile.shape[1]),cv2.BORDER_CONSTANT, value=[0, 0, 0])
-            image_tiles.append(image_tile)
-    return image_tiles
-            
+        
+def draw_detections(img, prediction, clss_name):
+    img_draw = np.copy(img).astype("float")
+    bboxes, confs, clss, masks = prediction #bboxes in xyxy
+    for ii, bbox in enumerate(bboxes):
+        box = bbox.cpu().numpy().astype('int')
+        label_box =  str(clss_name[int(clss[ii].cpu().numpy())]) + " " + str(np.round(confs[ii].cpu().numpy(),2))
+        img_draw = plot_one_box(box,img_draw,label=label_box)
+    return img_draw
 
-def im2patches(img, patch_size=640, overlap=0.2):
-    h,w,channels= img.shape
-    step = round(patch_size*(1-overlap))
-    n_h, n_w, _ = np.ceil(np.array(img.shape) / step).astype(int) * step
+def lists2img(img, predictions_nms, classes_names, fruit_zone):
+    bboxes, confs, clss, masks = predictions_nms
+    # Draw detections over image and save it 
+    out_img = draw_detections(img, predictions_nms, classes_names)
     
-    if h < patch_size:
-        n_h = patch_size
-    if w < patch_size:
-        n_w = patch_size
+    # Generate masks
+    out_img_masked, total_mask = generate_final_mask(masks, img, fruit_zone)
     
-    img_border= cv2.copyMakeBorder(img,0,int(n_h-h), 0, int(n_w-w),cv2.BORDER_CONSTANT, value=[0, 0, 0]) 
-    patches = patch_image(img_border, patch_size, overlap)
-    empty_mask = np.zeros((img_border.shape[0], img_border.shape[1]))
-    patches_np = np.reshape(patches, (int(n_h/step), int(n_w/step), patch_size, patch_size, channels))
-    return patches_np, empty_mask
+    return out_img, out_img_masked, total_mask
+
+
+def detic2img(img, predictions_nms, classes_names):
+    predictions_nms  = detic2flat(predictions_nms) #bboxes in xyxy
+    bboxes, confs, clss, masks = predictions_nms 
+    # Draw detections over image and save it 
+    out_img = draw_detections(img, predictions_nms, classes_names)
+    
+    # Generate masks
+    out_img_masked, total_mask = generate_final_mask(masks, img)
+    
+    return out_img, out_img_masked, total_mask
+
 
 def patch_detic2list(empty_mask, detic_pred, patch_size, row, column, overlap, fruit_zone):
     bboxes, confs, clss, masks= detic2flat(detic_pred)
@@ -332,8 +273,8 @@ def patch_detic2list(empty_mask, detic_pred, patch_size, row, column, overlap, f
         total_mask[total_mask > 1] = 1
 
     return bboxes, confs, clss, total_mask
-
-def detic_proccess_img(img_p, args, detic_predictor, logger, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None):
+'''
+def detic_proccess_img_old(img_p, args, detic_predictor, logger, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None):
     if img_o is None:
         img_o=img_p
     
@@ -417,11 +358,23 @@ def detic_proccess_img(img_p, args, detic_predictor, logger, save=True, save_pat
             cv2.imwrite(out_filename +"_vis.jpg", img_out_bbox)
             cv2.imwrite(out_filename +"_mask.jpg", img_out_mask)  
             
-    return img_out_bbox, img_out_mask
+    return img_out_bbox, img_out_mask, mask_tot
+'''
 
 def detic_single_im(args, detic_predictor, logger, save=True, save_path="",img_processed=None, fruit_zone=(0,0,0,0), img_original=None):
     if img_processed is not None:
-        img_out_bbox, img_out_mask = detic_proccess_img(img_processed, args, detic_predictor, logger, save=save, save_path=save_path, fruit_zone=fruit_zone, img_o=img_original)
-    return img_out_bbox, img_out_mask  
+        img_out_bbox, img_out_mask, mask = detic_proccess_img(img_processed, args, detic_predictor, logger, save=save, save_path=save_path, fruit_zone=fruit_zone, img_o=img_original)
+    return img_out_bbox, img_out_mask, mask  
         
-            
+def detic_proccess_img(img, detic_predictor, args, fruit_zone, empty_mask, patch_id = (0,0)):
+    # Predict
+    pred_patch, visualized_output = detic_predictor.run_on_image(img) #TODO extract visualization part
+    img_out_bbox, img_out_mask, mask_tot, pred_str, p_patch_nms= detic_post_proccess(img, detic_predictor, pred_patch, args)
+    
+    # Save detections in full img coordinates
+    if args.patching:
+        bboxs, confs, clss, masks = patch_detic2list(empty_mask, p_patch_nms, args.patch_size, patch_id[0], patch_id[1], args.overlap, fruit_zone)
+    else:
+        bboxs, confs, clss, masks = None, None, None, None
+    return ((bboxs, confs, clss, masks), img_out_bbox, img_out_mask, mask_tot, pred_str)
+              
