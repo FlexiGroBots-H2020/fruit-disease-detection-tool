@@ -37,9 +37,11 @@ if __name__ == "__main__":
     if args.det_model == "Detic":
         model_predictor = load_detic(args, logger)
     else:
-        model_predictor = YOLO("models/best_segment_250_epochs_initial_model_l.pt")  # load a custom model
+        model_predictor = YOLO("yolov8x-seg.pt")  # load an official model
+        model_predictor = YOLO("models/best_segment_uva_modelo_x_150_epochs.pt")  # load a custom model
     
-    model, transform, metadata, vocabulary_xdec = load_xdecoder(args, logger)
+    if args.full_pipeline:
+        model, transform, metadata, vocabulary_xdec = load_xdecoder(args, logger)
     
     list_images_paths = [] 
     for input in args.input:
@@ -66,14 +68,16 @@ if __name__ == "__main__":
         'overlap': args.overlap, 
         'vocabulary_xdec': args.vocabulary_xdec,
         'vocabulary_detic': args.custom_vocabulary,
-        'conf_threshold': args.confidence_threshold
+        'conf_threshold': args.confidence_threshold,
+        'detection_model' : args.det_model, 
+        'full_pipeline' : args.full_pipeline
     }
     json_path = os.path.join(exp_folder,'variables.json')
     with open(json_path, 'w') as f:
         f.write(json.dumps(variables))
         
     # Load classification model: clss 0 (Botrytis/Damaged) and clss 1 (Healthy)
-    #yolo_clss_health = YOLO("yolov8l-cls.pt")  # load an official model
+    yolo_clss_health = YOLO("yolov8l-cls.pt")  # load an official model
     yolo_clss_health = YOLO("models/best_health_cls.pt")  # load a custom model
     
     metrics = []    
@@ -113,9 +117,12 @@ if __name__ == "__main__":
             
             # Predict with detection model over patches or full image
             img_out_bbox, img_out_mask, mask = predict_img(img_grapes_crop, args, model_predictor, logger, save=False, save_path=output_folder, img_o=img_ori_np, fruit_zone=fruit_bbox, health_model=yolo_clss_health)
-            
+                  
             # Generate final mask --> post-process
-            mask_final = process_mask(mask, save=False, save_path=output_folder, max_clusters=30)
+            if args.det_model == "Detic":
+                mask_final = process_mask(mask, save=False, save_path=output_folder, max_clusters=30)
+            else:
+                mask_final = mask
             
             # Compare results with GT data if exists
             if gt_data and cv2.countNonZero(mask_final):
@@ -127,14 +134,18 @@ if __name__ == "__main__":
             if args.debug:
                 cv2.imwrite(os.path.join(output_folder,"final_" + file_name), img_out_bbox)
                 cv2.imwrite(os.path.join(output_folder,"finalMask_" + file_name), img_out_mask)
-                out_img_masked = cv2.bitwise_and(img_ori_np, img_ori_np,  mask=mask_final.astype("uint8"))
-                cv2.imwrite(os.path.join(output_folder,"finalMaskProccessed_" + file_name), out_img_masked)
+                if args.det_model == "Detic":
+                    out_img_masked = cv2.bitwise_and(img_ori_np, img_ori_np,  mask=mask_final.astype("uint8"))
+                    cv2.imwrite(os.path.join(output_folder,"finalMaskProccessed_" + file_name), out_img_masked)
         else:
             # Predict with detection model over patches or full image
             img_out_bbox, img_out_mask, mask = predict_img(img_ori_np, args, model_predictor, logger, save=False, save_path=output_folder, health_model=yolo_clss_health)
             
             # Generate final mask --> post-process
-            mask_final = process_mask(mask, save=False, save_path=output_folder, max_clusters=30)
+            if args.det_model == "Detic":
+                mask_final = process_mask(mask, save=False, save_path=output_folder, max_clusters=30)
+            else:
+                mask_final = mask
             
             # Compare results with GT data if exists
             if gt_data and cv2.countNonZero(mask_final):
@@ -146,8 +157,9 @@ if __name__ == "__main__":
             if args.debug:
                 cv2.imwrite(os.path.join(output_folder,"final_" + file_name), img_out_bbox)
                 cv2.imwrite(os.path.join(output_folder,"finalMask_" + file_name), img_out_mask)
-                out_img_masked = cv2.bitwise_and(img_ori_np, img_ori_np,  mask=mask_final.astype("uint8"))
-                cv2.imwrite(os.path.join(output_folder,"finalMaskProccessed_" + file_name), out_img_masked)
+                if args.det_model == "Detic":
+                    out_img_masked = cv2.bitwise_and(img_ori_np, img_ori_np,  mask=mask_final.astype("uint8"))
+                    cv2.imwrite(os.path.join(output_folder,"finalMaskProccessed_" + file_name), out_img_masked)
                 
     # Obtain mean metrics and save if GT data exists
     if gt_data: 

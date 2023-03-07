@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import label, distance_transform_edt
 
 from detic_utils import detic_proccess_img
+from yolo_utils import yolo_proccess_img
 
 def load_detic(args, logger):
     cfg = setup_cfg_detic(args)
@@ -422,6 +423,7 @@ def im2patches(img, patch_size=640, overlap=0.2):
     return patches_np, empty_mask
 
 def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None, health_model=None, health_thres=0.5):
+    # If image to be proccessed is a patch of the original both have to be pass as input
     if img_o is None:
         img_o=img_p
     
@@ -441,7 +443,9 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
                     detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = detic_proccess_img(img_patch, model_predictor, args, fruit_zone, empty_mask, (ii, jj))
                     bboxs_p, confs_p, clss_p, masks_p = detections_p
                 else:
-                    bboxs_p, confs_p, clss_p, masks_p = None, None, None, None
+                    detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = yolo_proccess_img(img_patch, model_predictor, args, fruit_zone, empty_mask, (ii, jj))
+                    bboxs_p, confs_p, clss_p, masks_p = detections_p
+                        
                 bboxs_t = bboxs_t + bboxs_p.tolist()
                 confs_t = confs_t + confs_p.tolist()
                 clss_t = clss_t + clss_p.tolist()
@@ -449,10 +453,10 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
                 
                 logger.info("{} {}: {} in {:.2f}s".format(path, "patch " + str(ii) + " " + str(jj) ,pred_str, time.time() - start_time)) 
                 
-                # Search diseases over images
-                if health_model is not None:
-                    img_health = cv2.resize(img_out_mask, (640,640)) # fix model input dimensions
-                    results = health_model(img_health)
+                # Search diseases over images if there are detections and model to do it
+                if health_model is not None and np.max(img_out_mask) > 0:
+                    img_health = cv2.resize(img_out_mask, (640,640)) # fix image to model input dimensions
+                    results = health_model(img_health, imgsz=640)
                     disease_score = float(results[0].probs[0].cpu().detach().numpy())
                     healthy_score =float(results[0].probs[1].cpu().detach().numpy())
                     if disease_score > health_thres:
@@ -487,7 +491,9 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
         if args.det_model == "Detic":
             classes_names = model_predictor.metadata.thing_classes
         else:
-            classes_names = None
+            classes_names = []
+            for ii in range(len(model_predictor.names)):
+                classes_names.append(model_predictor.names[ii])
         
         # Draw output img     
         img_out_bbox, img_out_mask, mask_tot = lists2img(np.asarray(img_o), pred_compose_nms, classes_names, fruit_zone)
@@ -513,15 +519,15 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
         if args.det_model == "Detic":
             detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = detic_proccess_img(img_p, model_predictor, args, fruit_zone, empty_mask)
         else:
-            img_out_bbox, img_out_mask, mask_tot, pred_str = None, None, None, None
+            detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = yolo_proccess_img(img_p, model_predictor, args, fruit_zone, empty_mask)
                     
         
         logger.info("{}: {} in {:.2f}s".format(path, pred_str, time.time() - start_time)) 
         
         # Search diseases over images
         if health_model is not None:
-            img_health = cv2.resize(img_out_mask, (640,640)) # fix model input dimensions
-            results = health_model(img_health)
+            img_health = cv2.resize(img_out_mask, (640,640)) # fix img to model input dimensions
+            results = health_model(img_health, imgsz=640)
             disease_score = float(results[0].probs[0].cpu().detach().numpy())
             healthy_score =float(results[0].probs[1].cpu().detach().numpy())
             if disease_score > health_thres:

@@ -15,20 +15,21 @@
                 "--config-file-detic",
                 "Detic/configs/Detic_LCOCOI21k_CLIP_SwinB_896b32_4x_ft4x_max-size.yaml",
                 "--input",
-                "inputs/uvas/White-Grapes-Rot-Header.jpg",
+                "inputs/uvas/Captura5.png",
                 "--output",
                 "output/",
                 "--vocabulary",
                 "custom",
                 "--custom_vocabulary",
-                "grape, leaves, botrytis_grape",
+                "grape, botrytis_grape",
                 "--confidence-threshold",
-                "0.4",
+                "0.15",
                 "--nms_max_overlap",
                 "0.3",
                 "--xdec_img_size", "512",
                 "--vocabulary_xdec", "closer vineyard",
-                "--debug"
+                "--debug",
+                "--det_model", "YOLO"
             ]
         },
         {
@@ -43,15 +44,15 @@
                 "--config-file-detic",
                 "Detic/configs/Detic_LI_CLIP_SwinB_896b32_4x_ft4x_max-size.yaml",
                 "--input",
-                "inputs/uvas/White-Grapes-Rot-Header.jpg",
+                "inputs/Pilot1/row_8_1/default/images/*.png",
                 "--output",
                 "output/",
                 "--vocabulary",
                 "custom",
                 "--custom_vocabulary",
-                "grape, botrytis_grape",
+                "grape",
                 "--confidence-threshold",
-                "0.35",
+                "0.15",
                 "--nms_max_overlap",
                 "0.5",
                 "--patching",
@@ -61,7 +62,8 @@
                 "0.2",
                 "--xdec_img_size", "512",
                 "--vocabulary_xdec", "closer vineyard",
-                "--debug"
+                "--debug",
+                "--det_model", "YOLO"
             ]
         }
     ]
