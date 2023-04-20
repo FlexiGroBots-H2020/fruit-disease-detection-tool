@@ -138,7 +138,7 @@ def get_parser():
     )
     
     parser.add_argument("--debug", default=False, action='store_true', help="Bool indicating if debug")
-    
+    parser.add_argument("--print_health", default=False, action='store_true', help="Bool indicating if print health over image")
     parser.add_argument("--full_pipeline", default=False, action='store_true', help="Bool indicating if use full pipeline approach")
     
     # DETIC SETUP    
@@ -184,6 +184,7 @@ def get_parser():
     parser.add_argument("--patching", default=False, action='store_true', help="To proccess the image in patches.")
     parser.add_argument("--patch_size", default=640, type=int, help="Patch of the patches.")
     parser.add_argument("--overlap", default=0.2, type=float, help="Overlap of the patches")
+    parser.add_argument("--seg_step", default=False, action='store_true', help="To proccess the image in patches.")
     
     # XDECODER SETUP 
     
@@ -368,6 +369,59 @@ def lists2img(img, predictions_nms, classes_names, fruit_zone):
     
     return out_img, out_img_masked, total_mask
 
+def bbox_to_coco(bbox, img_size):
+    x_min, y_min, x_max, y_max = bbox
+    img_width, img_height = img_size
+
+    # Convert to relative coords
+    x_min_rel = x_min / img_width
+    y_min_rel = y_min / img_height
+    x_max_rel = x_max / img_width
+    y_max_rel = y_max / img_height
+
+    return [x_min_rel, y_min_rel, x_max_rel, y_max_rel]
+
+
+def pred2COCOannotations(img, predictions_nms, out_folder, file_name):
+    bboxes, confs, clss, masks = predictions_nms
+    height, width, _ = img.shape
+    
+    txt_path_file = os.path.join(out_folder, file_name +".txt")
+
+    coco_annotations = {
+        "info": {
+            "description": "COCO-style annotations",
+            "version": "1.0"
+        },
+        "images": [
+            {
+                "id": out_folder,
+                "width": width,
+                "height": height,
+                }
+        ],
+        "annotations": []
+    }
+
+    for i, (bbox, conf, cls, msk) in enumerate(zip(bboxes, confs, clss, masks)):
+        h, w, _ = img.shape
+        coco_bbox = bbox_to_coco(np.asarray(bbox), (w,h))
+        annotation = {
+            "id": i + 1,
+            "image_id": out_folder + file_name,
+            "width": width,
+            "height": height,
+            "category_id": int(np.asarray(cls)),
+            "bbox": str(coco_bbox),
+            "score": float(np.asarray(conf)),
+            "segmentation": []  # Rellenar con la información de segmentación si está disponible
+        }
+        coco_annotations["annotations"].append(annotation)
+
+    with open(txt_path_file, "w") as outfile:
+        json.dump(coco_annotations, outfile, indent=2)
+
+
 
 def generate_final_mask(masks, img, fruit_zone=(0,0,0,0)):
     total_mask = np.zeros((img.shape[0], img.shape[1]))
@@ -382,6 +436,52 @@ def generate_final_mask(masks, img, fruit_zone=(0,0,0,0)):
         
     out_img_masked = cv2.bitwise_and(img, img,  mask=total_mask.astype("uint8"))
     return out_img_masked, total_mask
+
+
+def zoom_on_non_zero(image, black_threshold=0.8):
+    # Convert the image to grayscale to facilitate non-zero pixel detection
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Calculate the percentage of black pixels
+    total_pixels = gray.size
+    black_pixels = np.count_nonzero(gray == 0)
+    black_ratio = black_pixels / total_pixels
+
+    if black_ratio > black_threshold:
+        # Find the indices of the non-zero elements
+        rows, cols = np.nonzero(gray)
+
+        # Find the minimum and maximum coordinates of the non-zero rows and columns
+        row_min, row_max = np.min(rows), np.max(rows)
+        col_min, col_max = np.min(cols), np.max(cols)
+
+        # Calculate the region of interest (ROI) using the minimum and maximum coordinates
+        roi = image[row_min:row_max, col_min:col_max]
+
+        # Calculate the desired non-black pixel percentage in the output image
+        target_non_black_ratio = 1 - black_threshold
+
+        # Calculate the scaling factor needed to achieve the desired non-black pixel percentage
+        input_non_black_pixels = total_pixels - black_pixels
+        roi_non_black_pixels = roi.size / 3 - np.count_nonzero(roi == 0) / 3
+        scale_factor = np.sqrt(input_non_black_pixels / roi_non_black_pixels / target_non_black_ratio)
+
+        # Resize the output image to have a non-black pixel percentage equal to the black_threshold value
+        resized_roi = cv2.resize(roi, (int(roi.shape[1] * scale_factor), int(roi.shape[0] * scale_factor)), interpolation=cv2.INTER_LINEAR)
+
+        # Create a black image of the same size as the original image
+        zoomed_img = np.zeros_like(image)
+
+        # Calculate the coordinates where the resized image will be placed in the output image
+        start_row = (image.shape[0] - resized_roi.shape[0]) // 2
+        start_col = (image.shape[1] - resized_roi.shape[1]) // 2
+
+        # Place the resized image in the output image
+        zoomed_img[start_row:start_row + resized_roi.shape[0], start_col:start_col + resized_roi.shape[1]] = resized_roi
+
+        return zoomed_img
+    else:
+        return image
 
 
 def patch_image(image, patch_size, overlap):
@@ -422,11 +522,64 @@ def im2patches(img, patch_size=640, overlap=0.2):
     patches_np = np.reshape(patches, (int(n_h/step), int(n_w/step), patch_size, patch_size, channels))
     return patches_np, empty_mask
 
-def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None, health_model=None, health_thres=0.5):
+
+def check_health(health_model, img_patch, masks_p, health_thres):
+    health_mask = np.zeros(img_patch.shape)
+    health_flag = False
+    for msk in masks_p:
+        msk_np = msk.cpu().numpy().astype("uint8")
+       
+        if msk_np.shape != img_patch.shape:
+            msk_np = cv2.resize(msk_np, (640,640)) # fix image to model input dimensions 
+        img_crop_health = cv2.bitwise_and(img_patch, img_patch, mask=msk_np)    
+        img_health_in = cv2.resize(img_crop_health, (640,640)) # fix image to model input dimensions
+        img_zoomed = zoom_on_non_zero(img_health_in) 
+        results = health_model(img_zoomed, imgsz=640)
+        disease_score = float(results[0].probs[0].cpu().detach().numpy())
+        healthy_score =float(results[0].probs[1].cpu().detach().numpy())
+        if disease_score > health_thres:
+            health_flag = True
+            health_msg_d = "disease detected, conf: {:.2f}".format(disease_score)
+            color = (0,0,255)
+            color_mask = cv2.cvtColor(msk_np, cv2.COLOR_GRAY2RGB) * color
+            health_mask = health_mask + color_mask
+        else:
+            health_msg_h ="healthy, conf: {:.2f}".format(healthy_score)
+            color = (255,0,0)
+            color_mask = cv2.cvtColor(msk_np, cv2.COLOR_GRAY2RGB) * color
+            health_mask = health_mask + color_mask
+    if health_flag:
+        health_msg = health_msg_d
+    else: 
+        health_msg = health_msg_h
+    txt_position = (10, health_mask.shape[0]-10)
+    img_health = cv2.putText(np.copy(health_mask), health_msg, txt_position, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1) 
+    
+    return img_health, health_mask, health_msg, health_flag
+  
+  
+def patchmask2imgmask(mask_agg, mask, row, column, patch_size, overlap, fruit_zone=(0,0,0,0)):
+    # from patches mask to full dimension mask
+    mask_agg_patch = mask_agg[round(row*patch_size*(1 - overlap)):round(row*patch_size*(1 - overlap) + patch_size), round(column*patch_size*(1 - overlap)):round(column*patch_size*(1 - overlap) + patch_size)]
+    window_shape = mask_agg_patch.shape
+    if mask_agg_patch.shape != (patch_size,patch_size,3):
+            mask_agg_patch = cv2.copyMakeBorder(mask_agg_patch,0,int(patch_size-mask_agg_patch.shape[0]), 0, int(patch_size-mask_agg_patch.shape[1]),cv2.BORDER_CONSTANT, value=[0, 0, 0])
+    mask_agg_patch = mask_agg_patch + mask
+    if mask_agg_patch.shape != window_shape:
+            mask_agg_patch = mask_agg_patch[0:window_shape[0], 0:window_shape[1]]
+    mask_agg[(round(row*patch_size*(1 - overlap))):(round(row*patch_size*(1 - overlap) + patch_size)), (round(column*patch_size*(1 - overlap))):(round(column*patch_size*(1 - overlap) + patch_size))] = mask_agg_patch
+    if np.max(mask_agg)>255:
+        mask_agg[mask_agg > 255] = 255
+
+    return mask_agg
+
+def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None, health_model=None, health_thres=0.5, cont_det=0):
+    health_flag = False # False indicates that there is not disease
     # If image to be proccessed is a patch of the original both have to be pass as input
     if img_o is None:
         img_o=img_p
     
+    # Predict image patches   
     if args.patching:
         patch_size = args.patch_size
         overlap = args.overlap
@@ -434,6 +587,7 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
         n_row, n_col, _, _, _ = patches.shape
         logger.info("{} patches: {} rows and {} columns".format(str(n_row*n_col), str(n_row), str(n_col)))
         bboxs_t, confs_t, clss_t, masks_t = ([] for i in range(4))
+        health_mask_agg = np.zeros((empty_mask.shape[0], empty_mask.shape[1], 3))
         for ii in range(n_row):
             for jj in range(n_col):
                 # Detect over each patch
@@ -441,29 +595,29 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
                 img_patch = patches[ii][jj]
                 if args.det_model == "Detic":
                     detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = detic_proccess_img(img_patch, model_predictor, args, fruit_zone, empty_mask, (ii, jj))
-                    bboxs_p, confs_p, clss_p, masks_p = detections_p
+                    bboxs_p, confs_p, clss_p, masks_p, mask_p_agg = detections_p
                 else:
                     detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = yolo_proccess_img(img_patch, model_predictor, args, fruit_zone, empty_mask, (ii, jj))
-                    bboxs_p, confs_p, clss_p, masks_p = detections_p
+                    bboxs_p, confs_p, clss_p, masks_p, mask_p_agg = detections_p
                         
                 bboxs_t = bboxs_t + bboxs_p.tolist()
                 confs_t = confs_t + confs_p.tolist()
                 clss_t = clss_t + clss_p.tolist()
-                masks_t.append(masks_p) 
+                masks_t.append(mask_p_agg) 
                 
-                logger.info("{} {}: {} in {:.2f}s".format(path, "patch " + str(ii) + " " + str(jj) ,pred_str, time.time() - start_time)) 
+                logger.info("{} {}: {} in {:.2f}s".format(path, "patch " + str(ii) + " " + str(jj) , pred_str, time.time() - start_time)) 
                 
                 # Search diseases over images if there are detections and model to do it
                 if health_model is not None and np.max(img_out_mask) > 0:
-                    img_health = cv2.resize(img_out_mask, (640,640)) # fix image to model input dimensions
-                    results = health_model(img_health, imgsz=640)
-                    disease_score = float(results[0].probs[0].cpu().detach().numpy())
-                    healthy_score =float(results[0].probs[1].cpu().detach().numpy())
-                    if disease_score > health_thres:
-                        logger.info("{} {}: disease detected, conf: {:.2f}".format(path, "patch " + str(ii) + " " + str(jj), disease_score)) 
-                    else:
-                        logger.info("{} {}: healthy, conf: {:.2f}".format(path, "patch " + str(ii) + " " + str(jj), healthy_score))
-                    
+                    img_health, health_mask, health_msg, health_flag = check_health(health_model, img_patch, masks_p, health_thres)
+                    logger.info("Patch {} {}: {}".format(ii,jj,health_msg))
+                    health_mask_agg = patchmask2imgmask(health_mask_agg, health_mask, ii, jj, patch_size, overlap, fruit_zone)
+                else:
+                    health_mask = np.zeros(img_patch.shape)
+                    health_msg = "Unknown health status" 
+                    txt_position = (10, health_mask.shape[0]-10)
+                    img_health = cv2.putText(np.copy(health_mask), health_msg, txt_position, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)                          
+                
                 # Save results   
                 if save:
                     if save_path != "":
@@ -475,10 +629,13 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
                             out_filename = save_path
                     else:
                         out_filename=""
+                        
+                    if args.print_health:                  
+                        cv2.imwrite(out_filename + "_p_" + str(ii) + str(jj) +"_health.jpg", img_health)
                     
                     cv2.imwrite(out_filename + "_p_" + str(ii) + str(jj) +".jpg", img_patch)
                     cv2.imwrite(out_filename + "_p_" + str(ii) + str(jj) +"_vis.jpg", img_out_bbox)
-                    cv2.imwrite(out_filename + "_p_" + str(ii) + str(jj) +"_mask.jpg", img_out_mask) 
+                    cv2.imwrite(out_filename + "_p_" + str(ii) + str(jj) +"_mask.jpg", img_out_mask)
                     
         # Join all the predictions over patches
         pred_compose = torch.FloatTensor(np.array(bboxs_t)), torch.FloatTensor(np.array(confs_t)), torch.FloatTensor(np.array(clss_t)), torch.FloatTensor(np.array(masks_t))
@@ -486,6 +643,8 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
             pred_compose_nms = non_max_suppression_compose(pred_compose, iou_thres=args.nms_max_overlap)
         else:
             pred_compose_nms = pred_compose
+            
+        cont_det += len(pred_compose_nms[0])
             
         # Load classes names
         if args.det_model == "Detic":
@@ -498,6 +657,15 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
         # Draw output img     
         img_out_bbox, img_out_mask, mask_tot = lists2img(np.asarray(img_o), pred_compose_nms, classes_names, fruit_zone)
         
+        # Print health status over img
+        health_mask_agg_final = np.zeros(img_o.shape)
+        health_mask_agg_p = health_mask_agg[0:img_o.shape[0], 0:img_o.shape[1]]
+        health_mask_agg_final[fruit_zone[0]:fruit_zone[2],fruit_zone[1]:fruit_zone[3]] = health_mask_agg_p[0:(fruit_zone[2]-fruit_zone[0]), 0:(fruit_zone[3]-fruit_zone[1])]
+        if args.print_health and (health_model is not None):
+            health_msg = "Disease detected: {}".format(str(health_flag))
+            txt_position = (10, health_mask_agg_final.shape[0]-10)
+            img_health = cv2.putText(np.copy(health_mask_agg_final), health_msg, txt_position, cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 1)
+
         # Save results
         if save:
             if save_path:
@@ -509,10 +677,13 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
                     out_filename = save_path
             else:
                 out_filename=""
-            
+                
+            if args.print_health and (health_model is not None):
+                cv2.imwrite(out_filename +"_health.jpg", img_health)
             cv2.imwrite(out_filename +"_vis.jpg", img_out_bbox)
             cv2.imwrite(out_filename +"_mask.jpg", img_out_mask)    
-            
+    
+    # Predict full image        
     else:
         start_time = time.time()
         empty_mask = np.zeros((img_p.shape[0], img_p.shape[1]))
@@ -521,20 +692,28 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
         else:
             detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = yolo_proccess_img(img_p, model_predictor, args, fruit_zone, empty_mask)
                     
-        
+        cont_det += len(detections_p[0])
         logger.info("{}: {} in {:.2f}s".format(path, pred_str, time.time() - start_time)) 
         
         # Search diseases over images
-        if health_model is not None:
-            img_health = cv2.resize(img_out_mask, (640,640)) # fix img to model input dimensions
-            results = health_model(img_health, imgsz=640)
-            disease_score = float(results[0].probs[0].cpu().detach().numpy())
-            healthy_score =float(results[0].probs[1].cpu().detach().numpy())
-            if disease_score > health_thres:
-                logger.info("{}: disease detected, conf: {:.2f}".format(path, disease_score)) 
-            else:
-                logger.info("{}: healthy, conf: {:.2f}".format(path, healthy_score))
-                    
+        pred_compose_nms = detections_p
+        _, _, _, masks, mask_agg = detections_p
+        pred_health_as_block = True # select if want to predict health over each detection individually or only once fro the full mask
+        if pred_health_as_block:
+            masks = torch.from_numpy(np.expand_dims(mask_agg,0))
+        
+        if health_model is not None and np.max(img_out_mask) > 0:
+            img_health_in = cv2.resize(img_out_mask, (640,640)) # fix img to model input dimensions
+            img_health, health_mask, health_msg, health_flag = check_health(health_model, img_health_in, masks, health_thres)
+            img_health = cv2.resize(img_health, (img_o.shape[1],img_o.shape[0])) # fix img to original dimensions
+            logger.info("Im: {}".format(health_msg))
+        else:
+            health_mask = np.zeros(img_p.shape)
+            health_msg = "Unknown health status" 
+            txt_position = (10, health_mask.shape[0]-10)
+            img_health = cv2.putText(np.copy(health_mask), health_msg, txt_position, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)                          
+                
+        # Save results
         if save:
             if save_path:
                 if os.path.isdir(save_path):
@@ -545,8 +724,11 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
                     out_filename = save_path
             else:
                 out_filename=""
+                
+            if args.print_health and (health_model is not None):
+                cv2.imwrite(out_filename + "_health.jpg", img_health)
             
-            cv2.imwrite(out_filename +"_vis.jpg", img_out_bbox)
-            cv2.imwrite(out_filename +"_mask.jpg", img_out_mask)  
+            cv2.imwrite(out_filename + "_vis.jpg", img_out_bbox)
+            cv2.imwrite(out_filename + "_mask.jpg", img_out_mask)  
             
-    return img_out_bbox, img_out_mask, mask_tot
+    return img_out_bbox, img_out_mask, mask_tot, img_health, health_flag, cont_det, pred_compose_nms

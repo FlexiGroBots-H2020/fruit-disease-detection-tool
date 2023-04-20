@@ -272,7 +272,7 @@ def patch_detic2list(empty_mask, detic_pred, patch_size, row, column, overlap, f
     if np.max(total_mask)>1:
         total_mask[total_mask > 1] = 1
 
-    return bboxes, confs, clss, total_mask
+    return bboxes, confs, clss, masks, total_mask
 '''
 def detic_proccess_img_old(img_p, args, detic_predictor, logger, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None):
     if img_o is None:
@@ -373,8 +373,9 @@ def detic_proccess_img(img, detic_predictor, args, fruit_zone, empty_mask, patch
     
     # Save detections in full img coordinates
     if args.patching:
-        bboxs, confs, clss, masks = patch_detic2list(empty_mask, p_patch_nms, args.patch_size, patch_id[0], patch_id[1], args.overlap, fruit_zone)
+        bboxs, confs, clss, masks, mask_agg = patch_detic2list(empty_mask, p_patch_nms, args.patch_size, patch_id[0], patch_id[1], args.overlap, fruit_zone)
     else:
-        bboxs, confs, clss, masks = None, None, None, None
-    return ((bboxs, confs, clss, masks), img_out_bbox, img_out_mask, mask_tot, pred_str)
+        bboxs, confs, clss, masks = detic2flat(p_patch_nms)
+        mask_agg = mask_tot
+    return ((bboxs, confs, clss, masks, mask_agg), img_out_bbox, img_out_mask, mask_tot, pred_str)
               

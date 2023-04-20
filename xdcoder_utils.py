@@ -227,7 +227,7 @@ def refseg_video(video_pth, text, transform, model, metadata, output_root):
     output_file_vis.release() 
 
 
-def refseg_single_im(image_ori, text, transform, model, metadata, output_root, file_name = "refsem.png", save=True):
+def refseg_single_im(image_ori, text, transform, model, metadata, output_root, file_name = "refsem.png", save=True, mask_crop=True):
     with torch.no_grad():
         start_time = time.time()
         width = image_ori.size[0]
@@ -253,8 +253,10 @@ def refseg_single_im(image_ori, text, transform, model, metadata, output_root, f
         end_time = time.time() - start_time
         print("Segmentation finished in " + str(round(end_time, 2)) + "s")
         
-        if np.max(grd_mask) > 0:
+        if np.max(grd_mask) > 0 and mask_crop:
             out_img, fruit_zone = mask_cropping(image_ori, grd_mask)
+        elif np.max(grd_mask) > 0:
+            out_img, fruit_zone = extract_segmented(image_ori, grd_mask)
         else: # if not segmentations detected use the full image
             out_img = cv2.cvtColor(np.asarray(image_ori), cv2.COLOR_BGR2RGB)
             fruit_zone= (0,0,out_img.shape[0],out_img.shape[1]) # top left down right
@@ -314,5 +316,29 @@ def mask_cropping(img_original, grd_mask, margin_factor=0.1):
     #out_img = cv2.bitwise_and(img_original, img_original, mask=mask_crop)
     out_img = img_original_crop
     fruit_zone = (top_grapes, left, bottom, right)
+    
+    return out_img, fruit_zone
+
+def extract_segmented(img_original, grd_mask, margin_factor=0.1):
+    mask = grd_mask[0]
+    kernel = np.ones((10,10),np.uint8)
+    iterations = 10
+    opening = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    dilatated_mask = cv2.dilate(opening, kernel, iterations)
+    
+    positions = np.nonzero(dilatated_mask)
+    top = positions[0].min()
+    bottom = positions[0].max()
+    left = positions[1].min()
+    right = positions[1].max()
+    
+    mask_crop = mask[top:bottom, left:right]
+    mask_crop = mask_crop.astype("uint8")*255
+    
+    img_original_crop =  cv2.cvtColor(img_original[top:bottom, left:right], cv2.COLOR_BGR2RGB)
+    
+    out_img = cv2.bitwise_and(img_original_crop, img_original_crop, mask=mask_crop)
+    #out_img = img_original_crop
+    fruit_zone = (top, left, bottom, right)
     
     return out_img, fruit_zone

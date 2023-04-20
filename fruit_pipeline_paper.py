@@ -1,6 +1,6 @@
 import multiprocessing as mp
 
-from fruit_detection_utils import get_parser, load_detic, load_xdecoder, process_mask, mask_metrics, predict_img, pred2COCOannotations
+from fruit_detection_utils import get_parser, load_detic, load_xdecoder, process_mask, mask_metrics, predict_img
 
 import sys
 sys.path.insert(0, 'detectron2/')
@@ -16,7 +16,6 @@ import os
 import numpy as np
 import glob
 import json
-import time
 
 from ultralytics import YOLO
 
@@ -39,7 +38,7 @@ if __name__ == "__main__":
         model_predictor = load_detic(args, logger)
     else:
         model_predictor = YOLO("yolov8x-seg.pt")  # load an official model
-        model_predictor = YOLO("models/best_grapebrunch_model_X_150_epochs.pt")  # load a custom model
+        model_predictor = YOLO("models/best_segment_uva_modelo_x_150_epochs.pt")  # load a custom model
     
     if args.full_pipeline:
         model, transform, metadata, vocabulary_xdec = load_xdecoder(args, logger)
@@ -71,8 +70,7 @@ if __name__ == "__main__":
         'vocabulary_detic': args.custom_vocabulary,
         'conf_threshold': args.confidence_threshold,
         'detection_model' : args.det_model, 
-        'full_pipeline' : args.full_pipeline,
-        'segmentation_step': args.seg_step
+        'full_pipeline' : args.full_pipeline
     }
     json_path = os.path.join(exp_folder,'variables.json')
     with open(json_path, 'w') as f:
@@ -80,15 +78,11 @@ if __name__ == "__main__":
         
     # Load classification model: clss 0 (Botrytis/Damaged) and clss 1 (Healthy)
     yolo_clss_health = YOLO("yolov8l-cls.pt")  # load an official model
-    yolo_clss_health = YOLO("models/best_health_cls_v2.pt")  # load a custom model
+    yolo_clss_health = YOLO("models/best_health_cls.pt")  # load a custom model
     
     metrics = []    
-    cont_healthy = 0
-    cont_unhealthy = 0
-    cont_det = 0
-    # Process each input image
+    # Proccess images
     for img_path in list_images_paths:
-        start_time = time.time()
         # Set the paths to the images/outputs and GT data
         gt_path = os.path.join(img_path.split("/images")[0], "instances")
         file_name = img_path.split('/')[-1]
@@ -116,54 +110,25 @@ if __name__ == "__main__":
             gt_data = False
         
         if args.full_pipeline:
-            seg_start_time = time.time()
-            if args.seg_step:
-                try:
-                    img_grapes_crop, fruit_bbox, img_seg = refseg_single_im(img, vocabulary_xdec, transform, model, metadata, output_folder, base_name, save=False)
-                except:
-                    out_img = cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
-                    fruit_zone = (0,0,out_img.shape[0],out_img.shape[1]) # top left down right
-                    fruit_bbox = fruit_zone
-                    img_seg= cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
-                    img_grapes_crop = cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
-                    print("error segmentating")
-                if args.debug:
-                    cv2.imwrite(os.path.join(output_folder,"crop_" + file_name), img_grapes_crop)
-                    cv2.imwrite(os.path.join(output_folder,"seg_" + file_name), img_seg)
-                logger.info("Segmentation time: {:.2f} seconds".format(time.time() - seg_start_time))
-            else:
-                out_img = cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
-                fruit_zone = (0,0,out_img.shape[0],out_img.shape[1]) # top left down right
-                fruit_bbox = fruit_zone
-                img_seg= cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
-                img_grapes_crop = cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
-                
-            det_start_time = time.time()
-            # Predict with detection model over patches or full image
-            img_out_bbox, img_out_mask, mask, img_health, health_flag, cont_det, pred = predict_img(img_grapes_crop, args, model_predictor, logger, save=False, save_path=output_folder, img_o=img_ori_np, fruit_zone=fruit_bbox, health_model=yolo_clss_health, cont_det=cont_det)
-            logger.info("Detection time: {:.2f} seconds".format(time.time() - det_start_time))
+            img_grapes_crop, fruit_bbox, img_seg = refseg_single_im(img, vocabulary_xdec, transform, model, metadata, output_folder, base_name, save=False)
+            if args.debug:
+                cv2.imwrite(os.path.join(output_folder,"crop_" + file_name), img_grapes_crop)
+                cv2.imwrite(os.path.join(output_folder,"seg_" + file_name), img_seg)
             
-            post_start_time = time.time()
-            # Update health conts
-            if health_flag == True:
-                cont_unhealthy+=1
-            else:
-                cont_healthy+=1
-                
+            # Predict with detection model over patches or full image
+            img_out_bbox, img_out_mask, mask, img_health = predict_img(img_grapes_crop, args, model_predictor, logger, save=False, save_path=output_folder, img_o=img_ori_np, fruit_zone=fruit_bbox, health_model=yolo_clss_health)
+                  
             # Generate final mask --> post-process
             if args.det_model == "Detic":
                 mask_final = process_mask(mask, save=False, save_path=output_folder, max_clusters=30)
             else:
                 mask_final = mask
-                
-            logger.info("Post-processing time: {:.2f} seconds".format(time.time() - post_start_time))
-            
             
             # Compare results with GT data if exists
             if gt_data and cv2.countNonZero(mask_final):
                 iou, dice, jaccard, hausdorff = mask_metrics(gt_mask, mask_final)
                 logger.info("IoU:" + str(iou) + " F1-Dice:" + str(dice) + " Jacc:" + str(jaccard) + " Haus:" + str(hausdorff))
-                metrics.append([{"iou":iou}, {"Dice": dice}, {"Jaccard": jaccard}, {"Haus": hausdorff}, {"Time": (time.time()-start_time)}])
+                metrics.append([{"iou":iou}, {"Dice": dice}, {"Jaccard": jaccard}, {"Haus": hausdorff}])
             
             # Save output images
             if args.debug:
@@ -174,41 +139,15 @@ if __name__ == "__main__":
                 if args.det_model == "Detic":
                     out_img_masked = cv2.bitwise_and(img_ori_np, img_ori_np,  mask=mask_final.astype("uint8"))
                     cv2.imwrite(os.path.join(output_folder,"finalMaskProccessed_" + file_name), out_img_masked)
-                
-                # EXTRA CODE TO SAVE MASKS AS DATASET
-                output_folder.split("/")[:-1][0]
-                extra_folder = os.path.join(output_folder.split("/")[:-1][0], output_folder.split("/")[:-1][1], "mask_data")
-                if not os.path.exists(extra_folder):
-                    os.makedirs(extra_folder)
-                if np.max(img_out_mask) > 0:
-                    cv2.imwrite(os.path.join(extra_folder, file_name), img_out_mask)
-                    
-                # Generate metrics json file
-                json_path = os.path.join(extra_folder,'stats.json')
-                with open(json_path, 'w+') as f:
-                    f.write("Healthy {}/{} and Unhealthy{}/{}\n".format(cont_healthy,cont_healthy+cont_unhealthy,cont_unhealthy,cont_healthy+cont_unhealthy))
-                    f.write("Num detections {}\n".format(cont_det))
-                    f.write("Time: {}\n".format((time.time()- seg_start_time)))
-                
         else:
             # Predict with detection model over patches or full image
-            det_start_time = time.time()
-            img_out_bbox, img_out_mask, mask, img_health, health_flag, cont_det, pred = predict_img(img_ori_np, args, model_predictor, logger, save=False, save_path=output_folder, health_model=yolo_clss_health, cont_det=cont_det)
-            logger.info("Detection time: {:.2f} seconds".format(time.time() - det_start_time))
+            img_out_bbox, img_out_mask, mask, img_health = predict_img(img_ori_np, args, model_predictor, logger, save=False, save_path=output_folder, health_model=yolo_clss_health)
             
-            post_start_time = time.time()
-            if health_flag == True:
-                cont_unhealthy+=1
-            else:
-                cont_healthy+=1
-            
-
             # Generate final mask --> post-process
             if args.det_model == "Detic":
                 mask_final = process_mask(mask, save=False, save_path=output_folder, max_clusters=30)
             else:
                 mask_final = mask
-            logger.info("Post-processing time: {:.2f} seconds".format(time.time() - post_start_time))
             
             # Compare results with GT data if exists
             if gt_data and cv2.countNonZero(mask_final):
@@ -224,28 +163,8 @@ if __name__ == "__main__":
                     out_img_masked = cv2.bitwise_and(img_ori_np, img_ori_np,  mask=mask_final.astype("uint8"))
                     cv2.imwrite(os.path.join(output_folder,"finalMaskProccessed_" + file_name), out_img_masked)
                 if args.print_health:
-                    cv2.imwrite(os.path.join(output_folder,"health_" + file_name), img_health)
-                    
-                # EXTRA CODE TO SAVE MASKS AS DATASET
-                output_folder.split("/")[:-1][0]
-                extra_folder = os.path.join(output_folder.split("/")[:-1][0], output_folder.split("/")[:-1][1], "mask_data")
-                if not os.path.exists(extra_folder):
-                    os.makedirs(extra_folder)
-                cv2.imwrite(os.path.join(extra_folder, file_name), out_img_masked)
-                # Generate metrics json file
-                json_path = os.path.join(extra_folder,'stats.json')
-                with open(json_path, 'w+') as f:
-                    f.write("Healthy {}/{} and Unhealthy{}/{}\n".format(cont_healthy,cont_healthy+cont_unhealthy,cont_unhealthy,cont_healthy+cont_unhealthy))
-                    f.write("Num detections {}\n".format(cont_det))
-                    f.write("Time: {}\n".format((time.time()-det_start_time)))
-                    
-        logger.info("Total processing time for {}: {:.2f} seconds".format(file_name, time.time() - start_time))
+                     cv2.imwrite(os.path.join(output_folder,"health_" + file_name), img_health)
                 
-        # Save preds as annotations.txt
-        txt_path = os.path.join(exp_folder,"annotations") 
-        if not os.path.exists(txt_path):
-            os.mkdir(txt_path)
-        pred2COCOannotations(np.asarray(img_ori_np), pred, txt_path, base_name)      
     # Obtain mean metrics and save if GT data exists
     if gt_data: 
         # Calculate and save mean metrics values
@@ -253,22 +172,19 @@ if __name__ == "__main__":
         m_f1 = 0 
         m_jc = 0
         m_hf = 0
-        m_t = 0
         for ii in range(len(metrics)):
             m_iou = m_iou + metrics[ii][0]["iou"]
             m_f1 = m_f1 + metrics[ii][1]["Dice"]
             m_jc = m_jc + metrics[ii][2]["Jaccard"]
             m_hf = m_hf + metrics[ii][3]["Haus"]
-            m_t = m_t + metrics[ii][4]["Time"]
             
         m_iou = m_iou / (ii+1)
         m_f1 = m_f1 / (ii+1)
         m_jc = m_jc / (ii+1)
         m_hf = m_hf / (ii+1)
-        m_t = m_t / (ii+1)
         
-        logger.info("mean IoU:" + str(m_iou) + " mean F1-Dice:" + str(m_f1) + " mean Jacc:" + str(m_jc) + " mean Haus:" + str(m_hf) + " mean time:" + str(m_t))
-        metrics.append([{"mean iou":m_iou}, {"mean Dice": m_f1}, {"mean Jaccard": m_jc}, {"mean Haus": m_hf}, {"mean time": m_t}])
+        logger.info("mean IoU:" + str(iou) + " mean F1-Dice:" + str(dice) + " mean Jacc:" + str(jaccard) + " mean Haus:" + str(hausdorff))
+        metrics.append([{"mean iou":m_iou}, {"mean Dice": m_f1}, {"mean Jaccard": m_jc}, {"mean Haus": m_hf}])
             
         # Generate metrics json file
         json_path = os.path.join(exp_folder,'metrics.json')

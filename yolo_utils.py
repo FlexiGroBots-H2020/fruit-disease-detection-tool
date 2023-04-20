@@ -44,7 +44,7 @@ def patch_yolo2list(empty_mask, yolo_pred, patch_size, row, column, overlap, fru
     if np.max(total_mask)>1:
         total_mask[total_mask > 1] = 1
 
-    return bboxes, confs, clss, total_mask
+    return bboxes, confs, clss, masks, total_mask
 
 
 def plot_one_box(x, img, color=None, label=None, line_thickness=None):
@@ -141,13 +141,13 @@ def yolo_proccess_img(img, yolo_predictor, args, fruit_zone, empty_mask, patch_i
         
         # Save detections in full img coordinates
         if args.patching:
-            bboxs, confs, clss, masks = patch_yolo2list(empty_mask, predictions_nms, args.patch_size, patch_id[0], patch_id[1], args.overlap, fruit_zone)
+            bboxs, confs, clss, masks, mask_agg = patch_yolo2list(empty_mask, predictions_nms, args.patch_size, patch_id[0], patch_id[1], args.overlap, fruit_zone)
         else:
-            bboxs, confs, clss, masks = np.empty(0), np.empty(0), np.empty(0), empty_mask
+            bboxs, confs, clss, masks, mask_agg = bboxs_p, confs_p, class_p, masks_p, mask_tot
     else:
         img_out_bbox = img
         img_out_mask = np.zeros((img.shape[0], img.shape[1], 3))
         mask_tot = np.zeros((img.shape[0], img.shape[1]))
-        bboxs, confs, clss, masks = np.empty(0), np.empty(0), np.empty(0), empty_mask
+        bboxs, confs, clss, masks, mask_agg = np.empty(0), np.empty(0), np.empty(0), empty_mask, empty_mask
     
-    return ((bboxs, confs, clss, masks), img_out_bbox, img_out_mask, mask_tot, pred_str)
+    return ((bboxs, confs, clss, masks, mask_agg), img_out_bbox, img_out_mask, mask_tot, pred_str)
