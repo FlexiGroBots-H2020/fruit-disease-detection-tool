@@ -29,17 +29,19 @@ class Model(kserve.KFModel):
         logging.info("GPU available: %d" , torch.cuda.is_available())
         
         # Define and initialize all needed variables
-        init_model(self)
+        try:
+            init_model(self)
+            logging.info("Model initialized")
+        except Exception as e:
+            logging.warning("error init model: " + str(e))
         
-        logging.info("Model loaded")
-        
-
-    def load(self):
-        # Instance Detic Predictor
+        # Instance models
         try:
             load_model(self)
-        except:
-            logging.warning("error loading model")
+        except Exception as e:
+            logging.warning("error loading models: {}".format(e))
+        
+        logging.info("Models loaded")
         
 
     def predict(self, request: Dict):
@@ -53,19 +55,19 @@ class Model(kserve.KFModel):
         
         try:
             im = decode_im_b642np(img_b64_str)
-        except:
-            logging.info("Error prepocessing image")
+        except Exception as e:
+            logging.info("Error prepocessing image: {}".format(e))
         
         try:  
-            out_img, out_img_mask, out_mask, det_msg = infer(self, im, id, frame)
-            logging.info(det_msg)
-        except:
-            logging.info("Error processing image")
+            annotations_json, cont_det = infer(self, im, id, frame)
+            logging.info("Num detections: {}".format(cont_det))
+        except Exception as e:
+            logging.info("Error processing image: {}".format(e))
     
-        out_img_b64_str = encode_im_np2b64str(out_img)
-        out_img_mask_b64_str = encode_im_np2b64str(out_img_mask)
+        #out_img_health_b64_str = encode_im_np2b64str(img_health)
+        #out_img_mask_b64_str = encode_im_np2b64str(img_out_mask)
         
-        dict_out = {"device":id ,"frame":frame ,"im_detection":out_img_b64_str}
+        dict_out = {"device":id ,"frame":frame , "annotations_json": annotations_json}
         
         #logging.info(dict_out)
         logging.info("Image processed")
@@ -74,6 +76,6 @@ class Model(kserve.KFModel):
 
 
 if __name__ == "__main__":
-    model = Model("pest-model")
+    model = Model("fruit-model")
     kserve.KFServer().start([model])
 

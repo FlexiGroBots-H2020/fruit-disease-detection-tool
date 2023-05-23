@@ -7,6 +7,7 @@ import json
 import random
 import time
 import torchvision
+import logging
 
 from Detic.detic.predictor import VisualizationDemo
 
@@ -29,11 +30,17 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import label, distance_transform_edt
+import numpy as np
+from skimage import measure
+from shapely.geometry import Polygon, Point
+from shapely.ops import unary_union
+from shapely.geometry import MultiPolygon
+from skimage.draw import polygon2mask
 
 from detic_utils import detic_proccess_img
 from yolo_utils import yolo_proccess_img
 
-def load_detic(args, logger):
+def load_detic(args):
     cfg = setup_cfg_detic(args)
 
     # Instance Detic Predictor
@@ -42,13 +49,13 @@ def load_detic(args, logger):
     except:
         # second time it works
         detic_predictor = VisualizationDemo(cfg, args)
-        logger.warning("w: 'CustomRCNN' was already registered")
+        logging.warning("w: 'CustomRCNN' was already registered")
         
     return detic_predictor
 
-def load_xdecoder(args, logger):
+def load_xdecoder(args):
     
-    opt, cmdline_args= setup_cfg_xdecoder(args, logger)
+    opt, cmdline_args= setup_cfg_xdecoder(args)
     opt = init_distributed(opt)
 
     vocabulary_xdec = args.vocabulary_xdec
@@ -83,14 +90,14 @@ def setup_cfg_detic(args):
     cfg.freeze()
     return cfg
 
-def setup_cfg_xdecoder(args, logger):
+def setup_cfg_xdecoder(args):
     cmdline_args = args
 
     opt = load_opt_from_config_files(cmdline_args.config_file_xdec)
 
     if cmdline_args.config_overrides:
         config_overrides_string = ' '.join(cmdline_args.config_overrides)
-        logger.warning(f"Command line config overrides: {config_overrides_string}")
+        logging.warning(f"Command line config overrides: {config_overrides_string}")
         config_dict = json.loads(config_overrides_string)
         load_config_dict_to_opt(opt, config_dict)
 
@@ -126,6 +133,7 @@ def get_parser():
     # COMMON
     parser.add_argument(
         "--input",
+        default="",
         nargs="+",
         help="A list of space separated input images; "
         "or a single glob pattern such as 'directory/*.jpg' or a path to a video",
@@ -139,7 +147,7 @@ def get_parser():
     
     parser.add_argument("--debug", default=False, action='store_true', help="Bool indicating if debug")
     parser.add_argument("--print_health", default=False, action='store_true', help="Bool indicating if print health over image")
-    parser.add_argument("--full_pipeline", default=False, action='store_true', help="Bool indicating if use full pipeline approach")
+    parser.add_argument("--full_pipeline", default=True, action='store_true', help="Bool indicating if use full pipeline approach")
     
     # DETIC SETUP    
     parser.add_argument(
@@ -153,13 +161,13 @@ def get_parser():
     
     parser.add_argument(
         "--vocabulary",
-        default="lvis",
+        default="custom",
         choices=['lvis', 'openimages', 'objects365', 'coco', 'custom'],
         help="",
     )
     parser.add_argument(
         "--custom_vocabulary",
-        default="",
+        default="grape, botrytis_grape",
         help="",
     )
     parser.add_argument("--pred_all_class", action='store_true')
@@ -181,10 +189,10 @@ def get_parser():
                         help='Non-maxima suppression threshold: Maximum detection overlap.')
     
     
-    parser.add_argument("--patching", default=False, action='store_true', help="To proccess the image in patches.")
+    parser.add_argument("--patching", default=True, action='store_true', help="To proccess the image in patches.")
     parser.add_argument("--patch_size", default=640, type=int, help="Patch of the patches.")
     parser.add_argument("--overlap", default=0.2, type=float, help="Overlap of the patches")
-    parser.add_argument("--seg_step", default=False, action='store_true', help="To proccess the image in patches.")
+    parser.add_argument("--seg_step", default=True, action='store_true', help="To proccess the image in patches.")
     
     # XDECODER SETUP 
     
@@ -195,8 +203,8 @@ def get_parser():
     parser.add_argument('--overrides', help='arguments that used to override the config file in cmdline', nargs=argparse.REMAINDER)
     parser.add_argument('--xdec_pretrained_pth', default='X_Decoder/models/xdecoder_focalt_last.pt', help='Path(s) to the weight file(s).')
     parser.add_argument('--xdec_img_size', type=int, default=512 ,help='reshape size for the image to be proccessed wit x-decoder')
-    parser.add_argument('--vocabulary_xdec', nargs='+', default=['weed','soil'], help='Concepts to segmentate')
-    parser.add_argument('--det_model', default="Detic", help='Select the model use for detection: Detic or YOLO')
+    parser.add_argument('--vocabulary_xdec', nargs='+', default=['closer vineyard'], help='Concepts to segmentate')
+    parser.add_argument('--det_model', default="YOLO", help='Select the model use for detection: Detic or YOLO')
     
     return parser
 
@@ -382,7 +390,7 @@ def bbox_to_coco(bbox, img_size):
     return [x_min_rel, y_min_rel, x_max_rel, y_max_rel]
 
 
-def pred2COCOannotations(img, predictions_nms, out_folder, file_name):
+def pred2COCOannotations(img, mask_final, img_health, predictions_nms, out_folder="", file_name=""):
     bboxes, confs, clss, masks = predictions_nms
     height, width, _ = img.shape
     
@@ -400,7 +408,8 @@ def pred2COCOannotations(img, predictions_nms, out_folder, file_name):
                 "height": height,
                 }
         ],
-        "annotations": []
+        "detections": [],
+        "segmentations": [],
     }
 
     for i, (bbox, conf, cls, msk) in enumerate(zip(bboxes, confs, clss, masks)):
@@ -413,14 +422,20 @@ def pred2COCOannotations(img, predictions_nms, out_folder, file_name):
             "height": height,
             "category_id": int(np.asarray(cls)),
             "bbox": str(coco_bbox),
-            "score": float(np.asarray(conf)),
-            "segmentation": []  # Rellenar con la información de segmentación si está disponible
+            "score": float(np.asarray(conf))
         }
-        coco_annotations["annotations"].append(annotation)
+        coco_annotations["detections"].append(annotation)
+        
+    # Generate segmentation annotation
+    seg_annotations = mask_to_coco_segmentation(mask_final, img_health)
+    coco_annotations["segmentations"].append(seg_annotations)
 
-    with open(txt_path_file, "w") as outfile:
-        json.dump(coco_annotations, outfile, indent=2)
-
+    if out_folder != "":
+        with open(txt_path_file, "w") as outfile:
+            annotations_json = json.dump(coco_annotations, outfile, indent=2)
+    else:
+        annotations_json = json.dumps(coco_annotations)
+    return annotations_json
 
 
 def generate_final_mask(masks, img, fruit_zone=(0,0,0,0)):
@@ -573,7 +588,7 @@ def patchmask2imgmask(mask_agg, mask, row, column, patch_size, overlap, fruit_zo
 
     return mask_agg
 
-def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None, health_model=None, health_thres=0.5, cont_det=0):
+def predict_img(img_p, args, model_predictor, save=True, save_path="", path="", fruit_zone=(0,0,0,0), img_o=None, health_model=None, health_thres=0.5, cont_det=0):
     health_flag = False # False indicates that there is not disease
     # If image to be proccessed is a patch of the original both have to be pass as input
     if img_o is None:
@@ -585,7 +600,7 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
         overlap = args.overlap
         patches, empty_mask = im2patches(img_p, patch_size, overlap)
         n_row, n_col, _, _, _ = patches.shape
-        logger.info("{} patches: {} rows and {} columns".format(str(n_row*n_col), str(n_row), str(n_col)))
+        logging.info("{} patches: {} rows and {} columns".format(str(n_row*n_col), str(n_row), str(n_col)))
         bboxs_t, confs_t, clss_t, masks_t = ([] for i in range(4))
         health_mask_agg = np.zeros((empty_mask.shape[0], empty_mask.shape[1], 3))
         for ii in range(n_row):
@@ -593,6 +608,7 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
                 # Detect over each patch
                 start_time = time.time()
                 img_patch = patches[ii][jj]
+                #simg_patch = cv2.cvtColor(img_patch, cv2.COLOR_BGR2RGB)
                 if args.det_model == "Detic":
                     detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = detic_proccess_img(img_patch, model_predictor, args, fruit_zone, empty_mask, (ii, jj))
                     bboxs_p, confs_p, clss_p, masks_p, mask_p_agg = detections_p
@@ -605,12 +621,12 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
                 clss_t = clss_t + clss_p.tolist()
                 masks_t.append(mask_p_agg) 
                 
-                logger.info("{} {}: {} in {:.2f}s".format(path, "patch " + str(ii) + " " + str(jj) , pred_str, time.time() - start_time)) 
+                logging.info("{} {}: {} in {:.2f}s".format(path, "patch " + str(ii) + " " + str(jj) , pred_str, time.time() - start_time)) 
                 
                 # Search diseases over images if there are detections and model to do it
                 if health_model is not None and np.max(img_out_mask) > 0:
                     img_health, health_mask, health_msg, health_flag = check_health(health_model, img_patch, masks_p, health_thres)
-                    logger.info("Patch {} {}: {}".format(ii,jj,health_msg))
+                    logging.info("Patch {} {}: {}".format(ii,jj,health_msg))
                     health_mask_agg = patchmask2imgmask(health_mask_agg, health_mask, ii, jj, patch_size, overlap, fruit_zone)
                 else:
                     health_mask = np.zeros(img_patch.shape)
@@ -693,7 +709,7 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
             detections_p, img_out_bbox, img_out_mask, mask_tot, pred_str = yolo_proccess_img(img_p, model_predictor, args, fruit_zone, empty_mask)
                     
         cont_det += len(detections_p[0])
-        logger.info("{}: {} in {:.2f}s".format(path, pred_str, time.time() - start_time)) 
+        logging.info("{}: {} in {:.2f}s".format(path, pred_str, time.time() - start_time)) 
         
         # Search diseases over images
         pred_compose_nms = detections_p
@@ -706,7 +722,7 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
             img_health_in = cv2.resize(img_out_mask, (640,640)) # fix img to model input dimensions
             img_health, health_mask, health_msg, health_flag = check_health(health_model, img_health_in, masks, health_thres)
             img_health = cv2.resize(img_health, (img_o.shape[1],img_o.shape[0])) # fix img to original dimensions
-            logger.info("Im: {}".format(health_msg))
+            logging.info("Im: {}".format(health_msg))
         else:
             health_mask = np.zeros(img_p.shape)
             health_msg = "Unknown health status" 
@@ -732,3 +748,124 @@ def predict_img(img_p, args, model_predictor, logger, save=True, save_path="", p
             cv2.imwrite(out_filename + "_mask.jpg", img_out_mask)  
             
     return img_out_bbox, img_out_mask, mask_tot, img_health, health_flag, cont_det, pred_compose_nms
+
+
+import numpy as np
+import pycocotools.mask as mask_util
+from scipy import ndimage
+
+def mask_to_coco_segmentation(mask, health_mask, small_object_threshold=0.2):
+    """Convert a binary segmentation mask to COCO 'segmentation' annotation format, excluding small blobs.
+
+    Args:
+        mask (ndarray): a 2D Numpy array of shape (H, W), where H is the height and W is the width of the image.
+                        Each pixel is either 0 (background) or 1 (object).
+        small_object_threshold (float): if the size of a blob is less than this fraction of the average blob size, it is removed.
+
+    Returns:
+        segmentation_data (dict): a dictionary containing the converted data in COCO format.
+    """
+    
+    # Make sure the mask is in the correct format
+    if not isinstance(mask, np.ndarray):
+        raise ValueError("mask must be a 2D Numpy array")
+
+    # Create a copy of the mask
+    mask_copy = mask.copy()
+
+    # Label different blobs in the mask
+    labeled_mask, num_labels = ndimage.label(mask_copy)
+
+    # Compute the size of each blob
+    blob_sizes = ndimage.sum(mask_copy, labeled_mask, range(num_labels + 1))
+
+    # Compute the average blob size
+    average_blob_size = blob_sizes.mean()
+
+    # Create a mask for small blobs
+    small_blobs = np.isin(labeled_mask, np.where(blob_sizes < small_object_threshold * average_blob_size))
+
+    # Remove small blobs
+    mask_copy[small_blobs] = 0
+
+    # Asegúrate de que la máscara esté en uint8
+    mask_copy = mask_copy.astype(np.uint8)
+
+    # Encuentra contornos en la máscara
+    contours = measure.find_contours(mask_copy, 0.5)
+
+    # Inicializa la lista de polígonos
+    polygons = []
+
+    # Inicializa el área total
+    area = 0
+
+    for contour in contours:
+        # Flip from (row, col) representation to (x, y)
+        for i in range(len(contour)):
+            row, col = contour[i]
+            contour[i] = (col - 1, row - 1)
+
+        # Make a polygon and simplify it
+        poly = Polygon(contour)
+        poly = poly.simplify(1.0, preserve_topology=False)
+
+        # Para manejar casos donde después de la simplificación nos quedamos con un polígono multiparte ("MultiPolygon")
+        if poly.geom_type == 'MultiPolygon':
+            # Unimos todos los polígonos en uno solo
+            allparts = [p.buffer(0) for p in poly]
+            poly = unary_union(allparts)
+
+        if poly.geom_type == 'Polygon':
+            x, y = poly.exterior.coords.xy
+            poly_points = [(x[i], y[i]) for i in range(len(x))]
+            polygons.append(poly_points)
+            area += poly.area
+            
+    # Compute bbox
+    health_status = []
+    for polygon in polygons:
+        health_status.append(check_polygon_color(polygon, health_mask))
+
+    segmentation_data = {
+        "segmentation": polygons,
+        "health_status": health_status
+
+    }
+
+    return segmentation_data
+
+
+def check_polygon_color(polygon, color_mask):
+    """Check the color of the pixels within a polygon in a color segmentation mask.
+
+    Args:
+        polygon (list): a list of (x, y) pairs defining the vertices of the polygon.
+        color_mask (ndarray): a 3D Numpy array of shape (H, W, 3), where H is the height and W is the width of the image,
+                              and the third dimension represents the color channels (in RGB order).
+
+    Returns:
+        label (int): 0 if all non-black pixels within the polygon are blue in the color mask, 1 otherwise.
+    """
+
+    # Convert polygon coordinates to a 2D array (if not already)
+    if isinstance(polygon[0], tuple):
+        polygon = np.array(polygon)
+
+    # The polygon coordinates should be in (row, col) format (y, x)
+    polygon = np.fliplr(polygon)
+
+    # Create a binary mask with the same shape as the color mask
+    poly_mask = polygon2mask(color_mask.shape[:2], polygon)
+
+    # Now, use this mask to get the pixels within the polygon from the color mask
+    poly_pixels = color_mask[poly_mask]
+
+    # Remove black pixels (consider them as background)
+    non_black_pixels = poly_pixels[~np.all(poly_pixels == [0, 0, 0], axis=-1)]
+
+    # Check if all these non-black pixels are blue
+    if np.all(non_black_pixels == [255, 0, 0]):
+        return 0
+    else:
+        return 1

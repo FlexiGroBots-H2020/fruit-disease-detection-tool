@@ -1,10 +1,18 @@
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
-  name: custom-model
+  name: fruit-model
 spec:
   predictor:
     containers:
       - name: kserve-container
-        image: <REGISTRY>/custom-model:<VERSION>
-    
+        image: mariotrivinor/fruit-tool:v0
+        imagePullPolicy: Always 
+        envFrom:
+        - secretRef:
+            name: mqtt
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: 8Gi
+            cpu : 8

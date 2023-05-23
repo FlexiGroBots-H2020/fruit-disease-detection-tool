@@ -1,7 +1,9 @@
+ultralytics==8.0.20
+tensorflow
 tensorboard
 cmake 
 onnx
-pyyaml==5.1
+pyyaml>=5.3.1
 Pillow
 mss
 timm
@@ -42,3 +44,4 @@ gradio==3.13.0
 scann
 kornia==0.6.4
 torchmetrics==0.6.0
+

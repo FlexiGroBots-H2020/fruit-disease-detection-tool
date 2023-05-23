@@ -42,11 +42,11 @@ def non_max_suppression(detections, iou_thres=0.2):
     idx = torchvision.ops.nms(bboxes, confs, iou_thres)  # NMS
     idx_np = idx.cpu().numpy()
     
-    idx_np = postprocess_nms(idx_np, bboxes, inclusion_threshold=0.1)
+    idx_np = postprocess_nms(idx_np, bboxes, inclusion_threshold=0.2)
     
     return idx_np
 
-def postprocess_nms(idx_np, bboxes, inclusion_threshold=0.95):
+def postprocess_nms(idx_np, bboxes, inclusion_threshold=0.9):
     def relative_area(box1, box2):
         xi1 = max(box1[0], box2[0])
         yi1 = max(box1[1], box2[1])
@@ -84,14 +84,61 @@ def load_annotations(file_path):
 def save_annotations(file_path, data):
     with open(file_path, "w") as f:
         json.dump(data, f, indent=2)
-
+        
 def find_homography(img_s, img_d):
+    orb = cv2.ORB_create()
+    keypoints1, descriptors1 = orb.detectAndCompute(img_s, None)
+    keypoints2, descriptors2 = orb.detectAndCompute(img_d, None)
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    matches = bf.knnMatch(descriptors1, descriptors2, k=2)
+
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.7 * n.distance:
+            good_matches.append(m)
+
+    src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+
+    homography, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    return homography
+        
+def find_homography_fast(img_s, img_d):
     # Crear un objeto ORB
     orb = cv2.ORB_create(1000)
 
     # Detectar y calcular características y descriptores
     keypoints1, descriptors1 = orb.detectAndCompute(img_s, None)
     keypoints2, descriptors2 = orb.detectAndCompute(img_d, None)
+
+    # Crear un objeto FLANN Matcher con índices de árboles kd
+    index_params = dict(algorithm=6, table_number=6, key_size=12, multi_probe_level=1)
+    search_params = dict(checks=50)
+    matcher = cv2.FlannBasedMatcher(index_params, search_params)
+
+    # Realizar la correspondencia entre los descriptores utilizando FLANN Matcher
+    matches = matcher.knnMatch(descriptors1, descriptors2, k=2)
+
+    # Aplicar el criterio de proporción de Lowe para filtrar las correspondencias buenas
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.7 * n.distance:
+            good_matches.append(m)
+
+    src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+
+    homography, _ = cv2.findHomography(src_pts, dst_pts, cv2.USAC_MAGSAC, 5.0)
+    return homography
+
+def find_homography_slow(img_s, img_d):
+    # Crear un objeto AKAZE
+    akaze = cv2.AKAZE_create()
+
+    # Detectar y calcular características y descriptores
+    keypoints1, descriptors1 = akaze.detectAndCompute(img_s, None)
+    keypoints2, descriptors2 = akaze.detectAndCompute(img_d, None)
 
     matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = matcher.match(descriptors1, descriptors2)
@@ -100,7 +147,7 @@ def find_homography(img_s, img_d):
     src_pts = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
     dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
-    homography, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 10.0)
+    homography, _ = cv2.findHomography(src_pts, dst_pts, cv2.USAC_MAGSAC, 5.0)
     return homography
 
 def transform_bbox(bbox, homography):
@@ -217,13 +264,14 @@ def main():
     images = sorted(images, key=lambda x: int(re.findall(r'\d+', x)[0]))
 
     num_images = len(images)
-    num_iters = num_images - 1
-    
+    #num_iters = num_images - 1
+    num_iters = round(math.log2(num_images))
     
     folder_path = in_folder_path
     
+    #for iter in range(num_iters -1):
     for iter in range(num_iters):
-   
+        
         images = [f for f in os.listdir(folder_path) if f.endswith(".jpg") or f.endswith(".png")]
         images = [f for f in images if not f.startswith("joined_") and not f.startswith("nms_")]
         images = sorted(images, key=lambda x: int(re.findall(r'\d+', x)[0]))
@@ -233,68 +281,90 @@ def main():
         if not os.path.exists(output_path_iter):
             os.makedirs(output_path_iter)
         
-        for i in range(num_images - 1):
-            file1_name = images[i].split(".")[0]
-            file2_name = images[i+1].split(".")[0]
-            img1_path = os.path.join(folder_path, images[i])
-            img2_path = os.path.join(folder_path, images[i+1])
-            file1_path = img1_path.split(".")[0]
-            file2_path = img2_path.split(".")[0]
-            img1TXT_path = file1_path + ".txt"
-            img2TXT_path = file2_path + ".txt"
-            
-            img1 = cv2.imread(img1_path)
-            img2 = cv2.imread(img2_path)
-
-            stitched_img, homography = stitch_images(img1, img2)
-            
-            if stitched_img is None:
-                print(f"Error: No se pudo realizar el stitching de las imágenes {i} y {i+1}.")
-                continue
-
-            # Guardar homography
-            homography_file_path = os.path.join(output_path_iter, f"homography_{i}_{i+1}.npy")
-            np.save(homography_file_path, homography)
-
-            with open(img2TXT_path) as f:
-                imgwarpped_annotations = json.load(f)
-            with open(img1TXT_path) as f:
-                imgfixed_annotations = json.load(f)
-
-            transformed_annotations = []
-            for annotation in imgfixed_annotations["annotations"]:
-                transformed_annotation = annotation.copy()
-                transformed_annotation["bbox"] = annotation["bbox"] if type(annotation["bbox"]) is list else eval(annotation["bbox"])
-                transformed_annotations.append(transformed_annotation)
+        #for i in range(num_images - 1):
+        for i in range(round(num_images/2)):
+            if i == (round(num_images/2)-1) and (num_images%2) !=0:
+                file1_name = images[i*2].split(".")[0]
+                img1_path = os.path.join(folder_path, images[i])
+                img1TXT_path = file1_path + ".txt"
+                file1_path = img1_path.split(".")[0]
+                img1 = cv2.imread(img1_path)
+                stitched_img = img1
+                with open(img1TXT_path) as f:
+                    imgfixed_annotations = json.load(f)
+                transformed_annotations = []
+                for annotation in imgfixed_annotations["annotations"]:
+                    transformed_annotation = annotation.copy()
+                    transformed_annotation["bbox"] = annotation["bbox"] if type(annotation["bbox"]) is list else eval(annotation["bbox"])
+                    transformed_annotations.append(transformed_annotation)
+                img_stitch_path = os.path.join(output_path_iter, str(i) + ".png")
+                cv2.imwrite(img_stitch_path, stitched_img)
+                out_annotations = {"annotations": []}
+                out_annotations["annotations"] = transformed_annotations
+                txt_nms_path = os.path.join(output_path_iter, str(i) + ".txt")
+                save_annotations(txt_nms_path, out_annotations)
+            else:    
+                file1_name = images[i*2].split(".")[0]
+                file2_name = images[i*2+1].split(".")[0]
+                img1_path = os.path.join(folder_path, images[i*2])
+                img2_path = os.path.join(folder_path, images[i*2+1])
+                file1_path = img1_path.split(".")[0]
+                file2_path = img2_path.split(".")[0]
+                img1TXT_path = file1_path + ".txt"
+                img2TXT_path = file2_path + ".txt"
                 
-            for annotation in imgwarpped_annotations["annotations"]:
-                bbox = coco_to_bbox(annotation["bbox"] if type(annotation["bbox"]) is list else eval(annotation["bbox"]), (annotation["width"], annotation["height"]))
-                transformed_bbox = transform_bbox(bbox, homography)
-                transformed_bbox_coco = bbox_to_coco(transformed_bbox, (stitched_img.shape[1], stitched_img.shape[0]))
-                transformed_annotation = annotation.copy()
-                transformed_annotation["bbox"] = transformed_bbox_coco
-                transformed_annotation["width"] = stitched_img.shape[1]
-                transformed_annotation["height"] = stitched_img.shape[0]
-                transformed_annotations.append(transformed_annotation)
+                img1 = cv2.imread(img1_path)
+                img2 = cv2.imread(img2_path)
+
+                stitched_img, homography = stitch_images(img1, img2)
+                
+                if stitched_img is None:
+                    print(f"Error: No se pudo realizar el stitching de las imágenes {i} y {i+1}.")
+                    continue
+
+                # Guardar homography
+                homography_file_path = os.path.join(output_path_iter, f"homography_{i}_{i+1}.npy")
+                np.save(homography_file_path, homography)
+
+                with open(img2TXT_path) as f:
+                    imgwarpped_annotations = json.load(f)
+                with open(img1TXT_path) as f:
+                    imgfixed_annotations = json.load(f)
+
+                transformed_annotations = []
+                for annotation in imgfixed_annotations["annotations"]:
+                    transformed_annotation = annotation.copy()
+                    transformed_annotation["bbox"] = annotation["bbox"] if type(annotation["bbox"]) is list else eval(annotation["bbox"])
+                    transformed_annotations.append(transformed_annotation)
+                    
+                for annotation in imgwarpped_annotations["annotations"]:
+                    bbox = coco_to_bbox(annotation["bbox"] if type(annotation["bbox"]) is list else eval(annotation["bbox"]), (annotation["width"], annotation["height"]))
+                    transformed_bbox = transform_bbox(bbox, homography)
+                    transformed_bbox_coco = bbox_to_coco(transformed_bbox, (stitched_img.shape[1], stitched_img.shape[0]))
+                    transformed_annotation = annotation.copy()
+                    transformed_annotation["bbox"] = transformed_bbox_coco
+                    transformed_annotation["width"] = stitched_img.shape[1]
+                    transformed_annotation["height"] = stitched_img.shape[0]
+                    transformed_annotations.append(transformed_annotation)
+                
+                stitched_img = crop_image(stitched_img)
+                annotated_img = draw_annotations_on_image(np.copy(stitched_img), transformed_annotations)
             
-            stitched_img = crop_image(stitched_img)
-            annotated_img = draw_annotations_on_image(np.copy(stitched_img), transformed_annotations)
-        
-            nms_img, nms_annotations = filter_bboxes(np.copy(stitched_img), transformed_annotations)
-            nms_img = crop_image(nms_img)
-            
-            img_stitch_path = os.path.join(output_path_iter, str(i) + ".png")
-            img_join_path = os.path.join(output_path_iter, "joined_" + str(i) + ".png")
-            img_nms_path = os.path.join(output_path_iter, "nms_" + str(i) +  ".png")
-            txt_nms_path = os.path.join(output_path_iter, str(i) + ".txt")
-            cv2.imwrite(img_stitch_path, stitched_img)
-            cv2.imwrite(img_join_path, annotated_img)
-            #if iter == (num_iters-1):
-            cv2.imwrite(img_nms_path, nms_img)
-            
-            out_annotations = {"annotations": []}
-            out_annotations["annotations"] = nms_annotations
-            save_annotations(txt_nms_path, out_annotations)
+                nms_img, nms_annotations = filter_bboxes(np.copy(stitched_img), transformed_annotations)
+                nms_img = crop_image(nms_img)
+                
+                img_stitch_path = os.path.join(output_path_iter, str(i) + ".png")
+                img_join_path = os.path.join(output_path_iter, "joined_" + str(i) + ".png")
+                img_nms_path = os.path.join(output_path_iter, "nms_" + str(i) +  ".png")
+                txt_nms_path = os.path.join(output_path_iter, str(i) + ".txt")
+                cv2.imwrite(img_stitch_path, stitched_img)
+                #cv2.imwrite(img_join_path, annotated_img)
+                if iter == (num_iters-1):
+                    cv2.imwrite(img_nms_path, nms_img)
+                
+                out_annotations = {"annotations": []}
+                out_annotations["annotations"] = nms_annotations
+                save_annotations(txt_nms_path, out_annotations)
         folder_path = output_path_iter
 
 

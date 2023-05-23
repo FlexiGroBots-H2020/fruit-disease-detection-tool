@@ -245,10 +245,10 @@ def refseg_single_im(image_ori, text, transform, model, metadata, output_root, f
         for idx, mask in enumerate(grd_mask):
             img_out_overlay = visual.draw_binary_mask(mask, color=random_color(rgb=True, maximum=1).astype(np.int).tolist(), text=text[idx], alpha=0.5)
 
-        output_folder = os.path.join(os.path.join(output_root))
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
         if save:
+            output_folder = os.path.join(os.path.join(output_root))
+            if not os.path.exists(output_folder):
+                os.makedirs(output_folder)
             cv2.imwrite(os.path.join(output_folder, "mask_" + file_name + ".png"),grd_mask[0].astype('int8')*255)
         end_time = time.time() - start_time
         print("Segmentation finished in " + str(round(end_time, 2)) + "s")

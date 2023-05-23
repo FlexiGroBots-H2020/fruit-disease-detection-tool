@@ -1,6 +1,6 @@
 import multiprocessing as mp
 
-from fruit_detection_utils import get_parser, load_detic, load_xdecoder, process_mask, mask_metrics, predict_img, pred2COCOannotations
+from fruit_detection_utils import get_parser, load_detic, load_xdecoder, process_mask, mask_metrics, predict_img, pred2COCOannotations, mask_to_coco_segmentation
 
 import sys
 sys.path.insert(0, 'detectron2/')
@@ -36,13 +36,13 @@ if __name__ == "__main__":
     logger.info("Arguments: " + str(args))
     
     if args.det_model == "Detic":
-        model_predictor = load_detic(args, logger)
+        model_predictor = load_detic(args)
     else:
         model_predictor = YOLO("yolov8x-seg.pt")  # load an official model
         model_predictor = YOLO("models/best_grapebrunch_model_X_150_epochs.pt")  # load a custom model
     
     if args.full_pipeline:
-        model, transform, metadata, vocabulary_xdec = load_xdecoder(args, logger)
+        model, transform, metadata, vocabulary_xdec = load_xdecoder(args)
     
     list_images_paths = [] 
     for input in args.input:
@@ -140,7 +140,7 @@ if __name__ == "__main__":
                 
             det_start_time = time.time()
             # Predict with detection model over patches or full image
-            img_out_bbox, img_out_mask, mask, img_health, health_flag, cont_det, pred = predict_img(img_grapes_crop, args, model_predictor, logger, save=False, save_path=output_folder, img_o=img_ori_np, fruit_zone=fruit_bbox, health_model=yolo_clss_health, cont_det=cont_det)
+            img_out_bbox, img_out_mask, mask, img_health, health_flag, cont_det, pred = predict_img(img_grapes_crop, args, model_predictor, save=False, save_path=output_folder, img_o=img_ori_np, fruit_zone=fruit_bbox, health_model=yolo_clss_health, cont_det=cont_det)
             logger.info("Detection time: {:.2f} seconds".format(time.time() - det_start_time))
             
             post_start_time = time.time()
@@ -193,7 +193,7 @@ if __name__ == "__main__":
         else:
             # Predict with detection model over patches or full image
             det_start_time = time.time()
-            img_out_bbox, img_out_mask, mask, img_health, health_flag, cont_det, pred = predict_img(img_ori_np, args, model_predictor, logger, save=False, save_path=output_folder, health_model=yolo_clss_health, cont_det=cont_det)
+            img_out_bbox, img_out_mask, mask, img_health, health_flag, cont_det, pred = predict_img(img_ori_np, args, model_predictor, save=False, save_path=output_folder, health_model=yolo_clss_health, cont_det=cont_det)
             logger.info("Detection time: {:.2f} seconds".format(time.time() - det_start_time))
             
             post_start_time = time.time()
@@ -245,7 +245,7 @@ if __name__ == "__main__":
         txt_path = os.path.join(exp_folder,"annotations") 
         if not os.path.exists(txt_path):
             os.mkdir(txt_path)
-        pred2COCOannotations(np.asarray(img_ori_np), pred, txt_path, base_name)      
+        annotations = pred2COCOannotations(np.asarray(img_ori_np), mask_final, img_health, pred, txt_path, base_name)     
     # Obtain mean metrics and save if GT data exists
     if gt_data: 
         # Calculate and save mean metrics values
