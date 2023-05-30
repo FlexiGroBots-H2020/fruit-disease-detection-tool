@@ -45,7 +45,7 @@
                 "--config-file-detic",
                 "Detic/configs/Detic_LCOCOI21k_CLIP_SwinB_896b32_4x_ft4x_max-size.yaml",
                 "--input",
-                "inputs/Pilot1/UGV/IMG_2298.JPG",
+                "inputs/Pilot1/UGV/IMG_3694.JPG",
                 "--output",
                 "output/",
                 "--vocabulary",
@@ -53,7 +53,7 @@
                 "--custom_vocabulary",
                 "grape, botrytis_grape",
                 "--confidence-threshold",
-                "0.15",
+                "0.3",
                 "--nms_max_overlap",
                 "0.2",
                 "--seg_step",
@@ -65,7 +65,6 @@
                 "--xdec_img_size", "512",
                 "--vocabulary_xdec", "closer vineyard",
                 "--debug",
-                "--print_health",
                 "--det_model", "YOLO"
             ]
         },

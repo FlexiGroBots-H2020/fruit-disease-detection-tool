@@ -4,13 +4,17 @@ from typing import Dict
 import logging
 import torch
 
-from kserve_utils import decode_im_b642np, encode_im_np2b64str, dict2json
-import torch
+import time
+import json
+import os
+
+from kserve_utils import payload2info
 
 import sys
 sys.path.insert(0, 'detectron2/')
 sys.path.insert(0, 'Detic/')
 sys.path.insert(0, 'Detic/third_party/CenterNet2/')
+import paho.mqtt.publish as publish
 
 
 from fruit_detection_kserve import load_model, init_model, infer
@@ -46,20 +50,24 @@ class Model(kserve.KFModel):
 
     def predict(self, request: Dict):
         
-        logging.info("Payload: %s", request)
+        logging.info("Predict call -------------------------------------------------------")
         
-        # Extract input variables from request
-        img_b64_str = request["img"]
-        id = request["device_id"]
-        frame = request["frame_id"]
-        
+        #logging.info("Payload: %s", request)
+        start_time = time.time()
         try:
-            im = decode_im_b642np(img_b64_str)
+            img, metadata = payload2info(request)
+            id = metadata[0]
+            frame_id = metadata[1]
+            init_time = metadata[2]
+            logging.info("Payload image shape: {}, device: {}, frame: {}".format(img.shape, id, frame_id))
         except Exception as e:
             logging.info("Error prepocessing image: {}".format(e))
         
+        decode_time = time.time() - start_time
+        logging.info(f"Im Decode and metadata extracted in time: {decode_time:.2f}s")
+        
         try:  
-            annotations_json, cont_det = infer(self, im, id, frame)
+            annotations_json, cont_det = infer(self, img, id, frame_id)
             logging.info("Num detections: {}".format(cont_det))
         except Exception as e:
             logging.info("Error processing image: {}".format(e))
@@ -67,12 +75,30 @@ class Model(kserve.KFModel):
         #out_img_health_b64_str = encode_im_np2b64str(img_health)
         #out_img_mask_b64_str = encode_im_np2b64str(img_out_mask)
         
-        dict_out = {"device":id ,"frame":frame , "annotations_json": annotations_json}
         
         #logging.info(dict_out)
         logging.info("Image processed")
+        # Encode out imgs
+        start_time = time.time()
+        dict_out = {"device":id ,"frame":frame_id, "init_time": init_time , "annotations_json": annotations_json}
+        encode_time = time.time() - start_time
+        logging.info(f"dict out time: {encode_time:.4f}s")
+        logging.info("Image processed")
+        
+        # Publish a message 
+        start_time = time.time()
+        mqtt_topic = "common-apps/fruit-model/output/" + id
+        client_id = self.name + "_" + id
+        publish.single(mqtt_topic, 
+                       json.dumps(dict_out), 
+                       hostname=os.getenv('BROKER_ADDRESS'), 
+                       port=int(os.getenv('BROKER_PORT')), 
+                       client_id=client_id, 
+                       auth = {"username": os.getenv('BROKER_USER'), "password": os.getenv('BROKER_PASSWORD')} )
+        encode_time = time.time() - start_time
+        logging.info(f"Publish out time: {encode_time:.2f}s")
 
-        return dict2json(dict_out)
+        return {}
 
 
 if __name__ == "__main__":

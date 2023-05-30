@@ -75,18 +75,23 @@ def load_model(self):
 def infer(self,img, id=0, frame_id=0):
     # Request reception
     logging.info("Infer step -------------------------------------------------------")
-    start_time = time.time()
     
+    start_time = time.time()
     logging.info("Infer over: {} {}; from user: {}; and frame_id {}".format(str(type(img)), str(img.dtype), str(id), str(frame_id)))
     logging.info("Device: {}".format(str(self.device)))
     logging.info("Original dim: {}".format(str(img.shape)))
+    
     img_ori_np = img.copy() # original dimensions
+    img_ori_np = cv2.cvtColor(img_ori_np, cv2.COLOR_BGR2RGB)
+    pil_image = Image.fromarray(img_ori_np).convert("RGB")
+    img_ori_np = cv2.cvtColor(img_ori_np, cv2.COLOR_RGB2BGR)
+    
     logging.info("set-up time: {:.4f} seconds".format(time.time() - start_time))
     
     # Referring segmentation
     seg_start_time = time.time()
     try:
-        pil_image = Image.fromarray(img_ori_np).convert("RGB")
+        logging.info("first pixel color check bf seg: {}".format(np.asarray(pil_image)[0][0]))
         img_grapes_crop, fruit_bbox, img_seg = refseg_single_im(pil_image, self.vocabulary_xdec,  self.transform,  self.model_seg,  self.metadata, output_root="", file_name="", save=False)
     except Exception as e:
         out_img = cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
@@ -94,13 +99,15 @@ def infer(self,img, id=0, frame_id=0):
         fruit_bbox = fruit_zone
         img_seg= cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
         img_grapes_crop = cv2.cvtColor(np.asarray(img_ori_np), cv2.COLOR_BGR2RGB)
-        print("error segmentating: {}".format(e))
+        logging.info("error segmentating: {}".format(e))
     
     logging.info("Segmentation time: {:.2f} seconds".format(time.time() - seg_start_time))
     
     # Detection
     det_start_time = time.time()
     # Predict with detection model over patches or full image
+    logging.info("first pixel color check bf det grapes crop: {}".format(img_grapes_crop[0][0]))
+    logging.info("first pixel color check bf det img_ori: {}".format(img_ori_np[0][0]))
     img_out_bbox, img_out_mask, mask, img_health, health_flag, cont_det, pred = predict_img(img_grapes_crop, self.args, self.model_predictor, save=True, save_path="", img_o=img_ori_np, fruit_zone=fruit_bbox, health_model=self.yolo_clss_health, cont_det=0)
     logging.info("Detection time: {:.2f} seconds".format(time.time() - det_start_time))
     
@@ -118,7 +125,10 @@ def infer(self,img, id=0, frame_id=0):
     
             
     # Save preds as annotations.txt
-    annotations_json = pred2COCOannotations(np.asarray(img_ori_np), mask_final, img_health, pred)
+    logging.info("img_ori_np shape, color: {}, {}".format(img_ori_np.shape, img_ori_np[0][0]))
+    logging.info("mask_final shape, color: {}, {}".format(mask_final.shape, mask_final[0][0]))
+    logging.info("img_health shape, color: {}, {}".format(img_health.shape, img_health[0][0]))
+    annotations_json = pred2COCOannotations(img_ori_np, mask_final, img_health, pred)
     
     logging.info("Total processing time: {:.2f} seconds".format(time.time() - start_time))
         

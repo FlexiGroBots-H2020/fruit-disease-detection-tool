@@ -45,3 +45,8 @@ scann
 kornia==0.6.4
 torchmetrics==0.6.0
 
+
+#MQTT
+paho-mqtt==1.6.1
+piexif
+

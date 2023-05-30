@@ -21,14 +21,14 @@ def reconstruct_mask(data):
     # Create an empty mask with the same dimensions as the original image
     mask = np.zeros((height, width, 3), dtype=np.uint8)
 
-    # Define the colors for healthy and unhealthy objects (RGB format)
-    color_healthy = [0, 0, 255]  # Blue
-    color_unhealthy = [255, 0, 0]  # Red
+    # Define the colors for healthy and unhealthy objects (BGR format)
+    color_healthy = [255, 0, 0]  # Blue
+    color_unhealthy = [0, 0, 255]  # Red
 
     # Iterate over each segmentation
     for segmentation in data['segmentations']:
         # Each segmentation is a list of polygons, and each polygon is a list of (x, y) coordinates
-        for polygon in segmentation['segmentation']:
+        for ii, polygon in enumerate(segmentation['segmentation']):
             # The polygon coordinates are in (x, y) format, but we need them in (row, col) format (i.e., (y, x))
             polygon = [(y, x) for (x, y) in polygon]
 
@@ -36,7 +36,7 @@ def reconstruct_mask(data):
             poly_mask = polygon2mask((height, width), polygon)
 
             # Determine the color of the object based on its health status
-            color = color_healthy if segmentation['health_status'][0] == 0 else color_unhealthy
+            color = color_healthy if segmentation['health_status'][ii] == 0 else color_unhealthy
 
             # Use the binary mask to set the corresponding pixels in the overall mask to the chosen color
             for i in range(3):
@@ -72,7 +72,7 @@ def apply_mask(image_path, mask):
 
 def main():
     # Load the original image
-    image_path = "inputs/uvas/prueba_api_fruit.jpg"
+    image_path = "inputs/uvas/IMG_1736.JPG"
     
     # Load the output data from the txt file
     with open('output.txt', 'r') as file:

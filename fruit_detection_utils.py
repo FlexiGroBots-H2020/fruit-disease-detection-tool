@@ -478,12 +478,13 @@ def zoom_on_non_zero(image, black_threshold=0.8):
 
         # Calculate the scaling factor needed to achieve the desired non-black pixel percentage
         input_non_black_pixels = total_pixels - black_pixels
-        roi_non_black_pixels = roi.size / 3 - np.count_nonzero(roi == 0) / 3
+        roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        roi_non_black_pixels = np.count_nonzero(roi_gray)
         scale_factor = np.sqrt(input_non_black_pixels / roi_non_black_pixels / target_non_black_ratio)
 
         # Resize the output image to have a non-black pixel percentage equal to the black_threshold value
         resized_roi = cv2.resize(roi, (int(roi.shape[1] * scale_factor), int(roi.shape[0] * scale_factor)), interpolation=cv2.INTER_LINEAR)
-
+        resized_roi = resize_image(resized_roi, max_dim=max(image.shape))
         # Create a black image of the same size as the original image
         zoomed_img = np.zeros_like(image)
 
@@ -538,17 +539,17 @@ def im2patches(img, patch_size=640, overlap=0.2):
     return patches_np, empty_mask
 
 
-def check_health(health_model, img_patch, masks_p, health_thres):
+def check_health(health_model, img_patch, masks_p, health_thres, save=False, save_path="", patch_id=""):
     health_mask = np.zeros(img_patch.shape)
     health_flag = False
-    for msk in masks_p:
+    for ii,msk in enumerate(masks_p):
         msk_np = msk.cpu().numpy().astype("uint8")
        
         if msk_np.shape != img_patch.shape:
             msk_np = cv2.resize(msk_np, (640,640)) # fix image to model input dimensions 
         img_crop_health = cv2.bitwise_and(img_patch, img_patch, mask=msk_np)    
         img_health_in = cv2.resize(img_crop_health, (640,640)) # fix image to model input dimensions
-        img_zoomed = zoom_on_non_zero(img_health_in) 
+        img_zoomed = zoom_on_non_zero(img_health_in, black_threshold=0.6) 
         results = health_model(img_zoomed, imgsz=640)
         disease_score = float(results[0].probs[0].cpu().detach().numpy())
         healthy_score =float(results[0].probs[1].cpu().detach().numpy())
@@ -563,6 +564,16 @@ def check_health(health_model, img_patch, masks_p, health_thres):
             color = (255,0,0)
             color_mask = cv2.cvtColor(msk_np, cv2.COLOR_GRAY2RGB) * color
             health_mask = health_mask + color_mask
+        if save:
+            img_save_path = os.path.join(save_path,"in_health_{}_{}.jpg".format(patch_id,ii))
+            txt_position = (10, img_zoomed.shape[0]-10)
+            if health_flag:
+                health_msg = health_msg_d
+            else: 
+                health_msg = health_msg_h
+            img_health_single_bunch = cv2.putText(np.copy(img_zoomed), health_msg, txt_position, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)  
+            cv2.imwrite(img_save_path, img_health_single_bunch)
+        
     if health_flag:
         health_msg = health_msg_d
     else: 
@@ -625,7 +636,7 @@ def predict_img(img_p, args, model_predictor, save=True, save_path="", path="", 
                 
                 # Search diseases over images if there are detections and model to do it
                 if health_model is not None and np.max(img_out_mask) > 0:
-                    img_health, health_mask, health_msg, health_flag = check_health(health_model, img_patch, masks_p, health_thres)
+                    img_health, health_mask, health_msg, health_flag = check_health(health_model, img_patch, masks_p, health_thres, save, save_path, "patch_{}_{}".format(ii,jj))
                     logging.info("Patch {} {}: {}".format(ii,jj,health_msg))
                     health_mask_agg = patchmask2imgmask(health_mask_agg, health_mask, ii, jj, patch_size, overlap, fruit_zone)
                 else:
@@ -681,6 +692,8 @@ def predict_img(img_p, args, model_predictor, save=True, save_path="", path="", 
             health_msg = "Disease detected: {}".format(str(health_flag))
             txt_position = (10, health_mask_agg_final.shape[0]-10)
             img_health = cv2.putText(np.copy(health_mask_agg_final), health_msg, txt_position, cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 1)
+        elif (health_model is not None):
+            img_health = np.copy(health_mask_agg_final)
 
         # Save results
         if save:
@@ -754,7 +767,7 @@ import numpy as np
 import pycocotools.mask as mask_util
 from scipy import ndimage
 
-def mask_to_coco_segmentation(mask, health_mask, small_object_threshold=0.2):
+def mask_to_coco_segmentation(mask, health_mask, small_object_threshold=0.15):
     """Convert a binary segmentation mask to COCO 'segmentation' annotation format, excluding small blobs.
 
     Args:
@@ -790,6 +803,8 @@ def mask_to_coco_segmentation(mask, health_mask, small_object_threshold=0.2):
 
     # Asegúrate de que la máscara esté en uint8
     mask_copy = mask_copy.astype(np.uint8)
+    kernel = np.ones((5,5),np.uint8) # Need to NOT have intering contours
+    mask_copy = cv2.morphologyEx(mask_copy, cv2.MORPH_CLOSE, kernel)
 
     # Encuentra contornos en la máscara
     contours = measure.find_contours(mask_copy, 0.5)
@@ -869,3 +884,22 @@ def check_polygon_color(polygon, color_mask):
         return 0
     else:
         return 1
+
+
+def resize_image(img, max_dim=640):
+
+    # Get the current dimensions of the image
+    height, width = img.shape[:2]
+
+    # Calculate the ratio
+    if max(height, width) == height:
+        r = max_dim / height
+        dim = (int(width * r), max_dim)
+    else:
+        r = max_dim / width
+        dim = (max_dim, int(height * r))
+
+    # Perform the resizing
+    resized = cv2.resize(img, dim, interpolation=cv2.INTER_AREA)
+
+    return resized
