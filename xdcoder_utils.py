@@ -257,10 +257,15 @@ def refseg_single_im(image_ori, text, transform, model, metadata, output_root, f
             out_img, fruit_zone = mask_cropping(image_ori, grd_mask)
         elif np.max(grd_mask) > 0:
             out_img, fruit_zone = extract_segmented(image_ori, grd_mask)
-        else: # if not segmentations detected use the full image
+        else: # if not segmentations detected use the full image but resize it if it's too big
             out_img = cv2.cvtColor(np.asarray(image_ori), cv2.COLOR_BGR2RGB)
-            fruit_zone= (0,0,out_img.shape[0],out_img.shape[1]) # top left down right
-            print("No segmentation results")  
+            top = int(out_img.shape[0]/2)
+            bottom = out_img.shape[0]
+            left = 0
+            right = out_img.shape[1]
+            fruit_zone = (top, left, bottom, right) # top left down right
+            out_img = out_img[top:bottom, left:right]
+            print("No segmentation results, searching in low part of the image")  
 
     return out_img, fruit_zone, cv2.cvtColor(img_out_overlay.get_image(), cv2.COLOR_BGR2RGB)
 

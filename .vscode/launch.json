@@ -15,7 +15,7 @@
                 "--config-file-detic",
                 "Detic/configs/Detic_LCOCOI21k_CLIP_SwinB_896b32_4x_ft4x_max-size.yaml",
                 "--input",
-                "inputs/Pilot1/row_7.1_1/default/images/*.png",
+                "inputs/uvas/frame11.png",
                 "--output",
                 "output/",
                 "--vocabulary",
@@ -101,6 +101,19 @@
                 "--debug",
                 "--det_model", "Detic"
             ]
+        }
+        ,
+        {
+            "name": "listenner_mqtt",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            
+            "args": [
+                "--topic", "common-apps/fruit-model/output/drone_A",
+            ],
         }
     ]
 }

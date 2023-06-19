@@ -20,7 +20,7 @@ def add_metadata_to_image(img, metadata):
 
     start_time = time.time()
     logging.info("Añadiendo metadatos EXIF a la imagen")
-    img_encoded, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 50])
+    img_encoded, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
     img_with_metadata = bytearray(exif_bytes) + buf.tobytes()
 
     logging.info("Imagen procesada con metadatos en %.2f segundos", time.time() - start_time)
@@ -65,18 +65,33 @@ def calculate_new_dimensions(image, max_dimension):
 def resize_image(image, new_dimensions):
     return cv2.resize(image, new_dimensions, interpolation=cv2.INTER_AREA)
 
-# Función principal
-def main(args):
+def is_image_or_video(path):
+    # Lista de extensiones de imagen y video comunes
+    image_extensions = ['.jpeg', '.jpg', '.png', '.gif', '.bmp', '.tiff', '.ico']
+    video_extensions = ['.mp4', '.mkv', '.flv', '.avi', '.mov', '.wmv', '.m4v']
 
+    # Obtener la extensión del archivo
+    _, ext = os.path.splitext(path)
+    ext = ext.lower()  # convertir a minúsculas para comparar
+    
+    # Chequear si la extensión está en las listas
+    if ext in image_extensions:
+        return 'image'
+    elif ext in video_extensions:
+        return 'video'
+    else:
+        return 'unknown'
+
+def video_process(args):
     # Abre el video
-    video = cv2.VideoCapture(args.video_path)
+    video = cv2.VideoCapture(args.input_path)
 
     fps = int(video.get(cv2.CAP_PROP_FPS))
     frames_to_skip = fps // args.fpsp
     frame_id = 0
 
     # Procesa cada fotograma del video
-    max_dimension = 1536
+    max_dimension = 1024
     current_frame = 0
     while video.isOpened():
         start_time = time.time()
@@ -107,9 +122,9 @@ def main(args):
             print(f"Adding metadata time: {encode_time:.2f}s")
             
             # Create a new thread for publishing the MQTT message
-            publish_thread = threading.Thread(target=publish_mqtt_message, args=("common-apps/modtl-model/input", payload, args.device_id))
+            publish_thread = threading.Thread(target=publish_mqtt_message, args=(args.topic, payload, args.device_id))
             publish_thread.start()
-            time.sleep(0.1)
+            time.sleep(0.6)
             
             frame_id += 1
         current_frame += 1
@@ -118,10 +133,44 @@ def main(args):
     print("Video proccessed")
     video.release()
 
+def image_process(args):
+    # Abre la imagen
+    image = cv2.imread(args.input_path)
+    # Procesa la imagen
+    start_time = time.time()
+    print(f"Processing image: {args.input_path}")
+
+    metadata = {
+        piexif.ImageIFD.Artist: args.device_id,
+        piexif.ImageIFD.ImageID: str(1),  # Only one image, so we use ID 1
+        piexif.ImageIFD.DateTime: str(time.time())
+    }
+
+    payload = add_metadata_to_image(image, metadata)
+    encode_time = time.time() - start_time
+    print(f"Adding metadata time: {encode_time:.2f}s")
+
+    # Create a new thread for publishing the MQTT message
+    publish_thread = threading.Thread(target=publish_mqtt_message, args=(args.topic, payload, args.device_id))
+    publish_thread.start()
+
+    print("Image processed")
+
+
+# Función principal
+def main(args):
+    input_format = is_image_or_video(args.input_path)
+    if input_format == "video":
+        video_process(args)
+    else:
+        image_process(args)
+   
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Video processing script.')
     parser.add_argument('--device_id', type=str, required=True, help='Device ID')
-    parser.add_argument('--video_path', type=str, required=True, help='Path to the video file')
+    parser.add_argument('--topic', type=str, required=True, help='Input topic')
+    parser.add_argument('--input_path', type=str, required=True, help='Path to the video file')
     parser.add_argument('--fpsp', type=int, default=1, help='Number of frames to process per second')
     args = parser.parse_args()
     main(args)

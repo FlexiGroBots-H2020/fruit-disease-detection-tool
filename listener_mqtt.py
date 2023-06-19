@@ -2,8 +2,8 @@ import argparse
 import paho.mqtt.client as mqtt
 import os
 import json
-import base64
 import time
+import numpy as np
 
 def on_connect(client, userdata, flags, rc):
     print("Connected with result code " + str(rc))
@@ -15,15 +15,26 @@ def on_message(client, userdata, msg):
     device_id = json_data['device']
     frame_id = json_data['frame']
     init_time = json_data['init_time']
-    tracks = json_data['tracks']
-    warnings = json_data['warnings']
-    distances = json_data['distances']
+    annotations_str = json_data['annotations_json']
+    annotations = json.loads(annotations_str)
+    detections = annotations['detections']
+    info = annotations['info']
+    segmentations = annotations['segmentations']
+    segmentation = segmentations[0]
+    health_vector = segmentation['health_status']
+    if health_vector != []:
+        if np.max(health_vector) == 0:
+            health_msg = "NO, BOTRYTIS NOT DETECTED"
+        else:
+            health_msg = "YES, BOTRYTIS DETECTED"
+    else:
+        health_msg = "Not grape bunches found"
 
     inference_delay = current_time - float(init_time)
-    print(f"{msg.topic} - Image {frame_id} from device {device_id} written at {time.time()}. Inference delay: {inference_delay:.2f} seconds")
-    print(f"Tracks: {tracks}")
-    print(f"Distances: {distances}")
-    print(f"Warnings: {warnings}")
+    print(f"-------------------------------")
+    print(f"{msg.topic} - Image {frame_id} from device {device_id} \nwritten at {time.time()}. Inference delay: {inference_delay:.2f} seconds")
+    print(f"HEALTH: {health_msg}")
+
     
     # Calculate and print FPS
     last_frame_time = userdata['last_frame_time']
