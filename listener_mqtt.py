@@ -15,10 +15,12 @@ def on_message(client, userdata, msg):
     device_id = json_data['device']
     frame_id = json_data['frame']
     init_time = json_data['init_time']
+    GPS_tag = json_data['GPS_tag']
     annotations_str = json_data['annotations_json']
     annotations = json.loads(annotations_str)
     detections = annotations['detections']
     info = annotations['info']
+    minio_path = annotations['minio_path']
     segmentations = annotations['segmentations']
     segmentation = segmentations[0]
     health_vector = segmentation['health_status']
@@ -33,6 +35,7 @@ def on_message(client, userdata, msg):
     inference_delay = current_time - float(init_time)
     print(f"-------------------------------")
     print(f"{msg.topic} - Image {frame_id} from device {device_id} \nwritten at {time.time()}. Inference delay: {inference_delay:.2f} seconds")
+    print(f"{msg.topic} - GPS {GPS_tag} and minio: {minio_path} \n")
     print(f"HEALTH: {health_msg}")
 
     

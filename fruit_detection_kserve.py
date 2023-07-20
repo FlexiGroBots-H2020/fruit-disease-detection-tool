@@ -2,13 +2,15 @@ import numpy as np
 import sys
 import logging
 import time
-from fruit_detection_utils import get_parser, load_detic, load_xdecoder, process_mask, predict_img, pred2COCOannotations
+from fruit_detection_utils import get_parser, load_detic, load_xdecoder, process_mask, predict_img, pred2COCOannotations, contains_red
 import sys
 from ultralytics import YOLO
 from xdcoder_utils import refseg_single_im
 import cv2
 import torch
 from PIL import Image
+from minio import Minio
+import tempfile
 
 import sys
 sys.path.insert(0, 'detectron2/')
@@ -128,7 +130,24 @@ def infer(self,img, id=0, frame_id=0):
     logging.info("img_ori_np shape, color: {}, {}".format(img_ori_np.shape, img_ori_np[0][0]))
     logging.info("mask_final shape, color: {}, {}".format(mask_final.shape, mask_final[0][0]))
     logging.info("img_health shape, color: {}, {}".format(img_health.shape, img_health[0][0]))
-    annotations_json = pred2COCOannotations(img_ori_np, mask_final, img_health, pred)
+
+    # Save image in minio if botrytis detected
+    if contains_red(img_health):
+        host = "minio-cli.platform.flexigrobots-h2020.eu"
+        access = "Pilot1-FlexiGroBotsH2020"
+        secret = "!&MXsK30%3Aze1$"
+        connection_minio = Minio(host, access_key= access, secret_key=secret, secure=True) 
+        #Upload file to bucket
+        temporal = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+        cv2.imwrite(temporal.name, img_ori_np)
+        bucket_name = "super-scenario-p1"
+        object_bucket = "super-scenario-p1/data/botrytis/images/" + str(id) + "_" + str(frame_id) + ".jpg"
+        connection_minio.fput_object(bucket_name, object_bucket, temporal.name)
+        temporal.close()
+    else:
+        object_bucket = "not_save"
+
+    annotations_json = pred2COCOannotations(img_ori_np, mask_final, img_health, pred, object_bucket)
     
     logging.info("Total processing time: {:.2f} seconds".format(time.time() - start_time))
         

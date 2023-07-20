@@ -59,6 +59,7 @@ class Model(kserve.KFModel):
             id = metadata[0]
             frame_id = metadata[1]
             init_time = metadata[2]
+            GPS_tag = metadata[3]
             logging.info("Payload image shape: {}, device: {}, frame: {}".format(img.shape, id, frame_id))
         except Exception as e:
             logging.info("Error prepocessing image: {}".format(e))
@@ -78,9 +79,10 @@ class Model(kserve.KFModel):
         
         #logging.info(dict_out)
         logging.info("Image processed")
+
         # Encode out imgs
         start_time = time.time()
-        dict_out = {"device":id ,"frame":frame_id, "init_time": init_time , "annotations_json": annotations_json}
+        dict_out = {"device":id ,"frame":frame_id, "init_time": init_time, "GPS_tag": GPS_tag, "annotations_json": annotations_json}
         encode_time = time.time() - start_time
         logging.info(f"dict out time: {encode_time:.4f}s")
         logging.info("Image processed")

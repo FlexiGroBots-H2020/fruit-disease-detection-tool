@@ -91,7 +91,7 @@ def video_process(args):
     frame_id = 0
 
     # Procesa cada fotograma del video
-    max_dimension = 1024
+    #max_dimension = 1024
     current_frame = 0
     while video.isOpened():
         start_time = time.time()
@@ -106,8 +106,9 @@ def video_process(args):
             print(f"Read time: {read_time:.2f}s")
 
             start_time = time.time()
-            new_dimensions = calculate_new_dimensions(frame, max_dimension)
-            resized_frame = resize_image(frame, new_dimensions)
+            #new_dimensions = calculate_new_dimensions(frame, max_dimension)
+            #resized_frame = resize_image(frame, new_dimensions)
+            resized_frame = frame #keep the original dimensions
             resize_time = time.time() - start_time
             print(f"Resize time: {resize_time:.2f}s")
 
@@ -115,7 +116,9 @@ def video_process(args):
             metadata = {
                 piexif.ImageIFD.Artist: args.device_id,
                 piexif.ImageIFD.ImageID: str(frame_id),
-                piexif.ImageIFD.DateTime: str(time.time())
+                piexif.ImageIFD.DateTime: str(time.time()),
+                piexif.ImageIFD.GPSTag: str(123123)
+                
             }
             payload = add_metadata_to_image(resized_frame, metadata)
             encode_time = time.time() - start_time
@@ -143,7 +146,8 @@ def image_process(args):
     metadata = {
         piexif.ImageIFD.Artist: args.device_id,
         piexif.ImageIFD.ImageID: str(1),  # Only one image, so we use ID 1
-        piexif.ImageIFD.DateTime: str(time.time())
+        piexif.ImageIFD.DateTime: str(time.time()),
+        piexif.ImageIFD.GPSTag: str(123123)
     }
 
     payload = add_metadata_to_image(image, metadata)

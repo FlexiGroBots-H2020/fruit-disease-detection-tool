@@ -40,6 +40,7 @@ from skimage.draw import polygon2mask
 from detic_utils import detic_proccess_img
 from yolo_utils import yolo_proccess_img
 
+
 def load_detic(args):
     cfg = setup_cfg_detic(args)
 
@@ -390,7 +391,7 @@ def bbox_to_coco(bbox, img_size):
     return [x_min_rel, y_min_rel, x_max_rel, y_max_rel]
 
 
-def pred2COCOannotations(img, mask_final, img_health, predictions_nms, out_folder="", file_name=""):
+def pred2COCOannotations(img, mask_final, img_health, predictions_nms, minio_path, out_folder="", file_name=""):
     bboxes, confs, clss, masks = predictions_nms
     height, width, _ = img.shape
     
@@ -408,6 +409,7 @@ def pred2COCOannotations(img, mask_final, img_health, predictions_nms, out_folde
                 "height": height,
                 }
         ],
+        "minio_path": minio_path,
         "detections": [],
         "segmentations": [],
     }
@@ -903,3 +905,16 @@ def resize_image(img, max_dim=640):
     resized = cv2.resize(img, dim, interpolation=cv2.INTER_AREA)
 
     return resized
+
+
+def contains_red(img, threshold=200):
+    # Convert to BGR color space if using cv2
+    bgr_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    
+    # Define a threshold for the red color. In this case, a pixel will be considered "red"
+    # if its red channel has a value higher than `threshold` and the green and blue channels
+    # have values lower than `threshold`.
+    red_pixels = (bgr_img[:,:,2] > threshold) & (bgr_img[:,:,0] < threshold) & (bgr_img[:,:,1] < threshold)
+    
+    # Return True if there's at least one red pixel in the image, and False otherwise
+    return np.any(red_pixels)

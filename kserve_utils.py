@@ -14,7 +14,7 @@ def extract_metadata(exif_data):
         print("Metadata not found")
         return
 
-    specified_tags = [piexif.ImageIFD.Artist, piexif.ImageIFD.ImageID, piexif.ImageIFD.DateTime]
+    specified_tags = [piexif.ImageIFD.Artist, piexif.ImageIFD.ImageID, piexif.ImageIFD.DateTime, piexif.ImageIFD.GPSTag]
 
     for tag in specified_tags:
         tag_name = piexif.TAGS["0th"][tag]["name"]
