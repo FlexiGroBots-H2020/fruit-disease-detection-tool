@@ -112,7 +112,7 @@
             "justMyCode": true,
             
             "args": [
-                "--topic", "common-apps/fruit-model/output/drone_A",
+                "--topic", "common-apps/fruit-model/output/",
             ],
         }
     ]

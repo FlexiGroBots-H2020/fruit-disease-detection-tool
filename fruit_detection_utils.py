@@ -8,6 +8,8 @@ import random
 import time
 import torchvision
 import logging
+from minio import Minio
+import tempfile
 
 from Detic.detic.predictor import VisualizationDemo
 
@@ -391,7 +393,7 @@ def bbox_to_coco(bbox, img_size):
     return [x_min_rel, y_min_rel, x_max_rel, y_max_rel]
 
 
-def pred2COCOannotations(img, mask_final, img_health, predictions_nms, minio_path, out_folder="", file_name=""):
+def pred2COCOannotations(img, mask_final, img_health, predictions_nms, minio_path="not_save", out_folder="", file_name=""):
     bboxes, confs, clss, masks = predictions_nms
     height, width, _ = img.shape
     
@@ -908,13 +910,41 @@ def resize_image(img, max_dim=640):
 
 
 def contains_red(img, threshold=200):
-    # Convert to BGR color space if using cv2
-    bgr_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    
     # Define a threshold for the red color. In this case, a pixel will be considered "red"
     # if its red channel has a value higher than `threshold` and the green and blue channels
     # have values lower than `threshold`.
-    red_pixels = (bgr_img[:,:,2] > threshold) & (bgr_img[:,:,0] < threshold) & (bgr_img[:,:,1] < threshold)
+    red_pixels = (img[:,:,2] > threshold) & (img[:,:,0] < threshold) & (img[:,:,1] < threshold)
     
     # Return True if there's at least one red pixel in the image, and False otherwise
     return np.any(red_pixels)
+
+def upload_image_to_minio(img_np, img_id, frame_id, bucket_name, object_prefix, minio_config):
+    # Read image from disk
+    img = img_np
+    
+    # Check if the image has been loaded correctly
+    if img is None:
+        print("Image not loaded correctly.")
+        return
+
+    # Create a temporary file
+    temporal = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    cv2.imwrite(temporal.name, img)
+
+    # Connect to Minio server
+    minio_client = Minio(
+        minio_config['host'], 
+        access_key=minio_config['access_key'], 
+        secret_key=minio_config['secret_key'], 
+        secure=minio_config['secure']
+    )
+
+    # Define the object name
+    object_name = object_prefix + str(img_id) + "_" + str(frame_id) + ".jpg"
+
+    # Upload the image
+    minio_client.fput_object(bucket_name, object_name, temporal.name)
+
+    # Close the temporary file
+    temporal.close()
+    return object_name

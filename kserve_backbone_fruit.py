@@ -59,7 +59,12 @@ class Model(kserve.KFModel):
             id = metadata[0]
             frame_id = metadata[1]
             init_time = metadata[2]
-            GPS_tag = metadata[3]
+            if len(metadata)>3:
+                GPS_tag = metadata[3]
+            else:
+                GPS_tag = "123456789"
+                logging.info("Not GPS tag provided")
+            
             logging.info("Payload image shape: {}, device: {}, frame: {}".format(img.shape, id, frame_id))
         except Exception as e:
             logging.info("Error prepocessing image: {}".format(e))
@@ -89,7 +94,7 @@ class Model(kserve.KFModel):
         
         # Publish a message 
         start_time = time.time()
-        mqtt_topic = "common-apps/fruit-model/output/" + id
+        mqtt_topic = "common-apps/fruit-model/output"
         client_id = self.name + "_" + id
         publish.single(mqtt_topic, 
                        json.dumps(dict_out), 
